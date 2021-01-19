@@ -21,3 +21,4 @@ path = "src/bench.rs"
 criterion = "0.3.3"
 memchr = { version = "*", path = ".." }
 libc = "0.2.81"
+sliceslice = "0.2.1"

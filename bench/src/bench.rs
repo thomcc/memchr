@@ -4,9 +4,11 @@ use criterion::{
 
 mod data;
 mod memchr;
+mod memmem;
 
 fn all(c: &mut Criterion) {
     memchr::all(c);
+    memmem::all(c);
 }
 
 fn define(
@@ -17,7 +19,6 @@ fn define(
     bench: impl FnMut(&mut Bencher<'_>) + 'static,
 ) {
     let tput = Throughput::Bytes(corpus.len() as u64);
-    // let benchmark = Benchmark::new(bench_name, bench).throughput(tput);
 
     let benchmark = Benchmark::new(bench_name, bench)
         .throughput(tput)

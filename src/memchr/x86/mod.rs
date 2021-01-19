@@ -1,4 +1,4 @@
-use crate::fallback;
+use super::fallback;
 
 // We only use AVX when we can detect at runtime whether it's available, which
 // requires std.

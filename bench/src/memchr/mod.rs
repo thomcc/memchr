@@ -12,14 +12,14 @@ use crate::{
     },
 };
 
-#[path = "../../../src/c.rs"]
+#[path = "../../../src/memchr/c.rs"]
 mod c;
 #[allow(dead_code)]
-#[path = "../../../src/fallback.rs"]
+#[path = "../../../src/memchr/fallback.rs"]
 mod fallback;
 mod imp;
 mod inputs;
-#[path = "../../../src/naive.rs"]
+#[path = "../../../src/memchr/naive.rs"]
 mod naive;
 
 pub fn all(c: &mut Criterion) {
