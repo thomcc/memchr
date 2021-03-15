@@ -33,20 +33,14 @@ instead of one. Similarly for `memchr3`.
 )))]
 compile_error!("memchr currently not supported on non-{16,32,64}");
 
-pub use crate::{
-    memchr::{
-        memchr, memchr2, memchr2_iter, memchr3, memchr3_iter, memchr_iter,
-        memrchr, memrchr2, memrchr2_iter, memrchr3, memrchr3_iter,
-        memrchr_iter, Memchr, Memchr2, Memchr3,
-    },
-    memmem::{
-        memmem, memmem_iter, memrmem, memrmem_iter, Memmem, MemmemFinder,
-        Memrmem, MemrmemFinder,
-    },
+pub use crate::memchr::{
+    memchr, memchr2, memchr2_iter, memchr3, memchr3_iter, memchr_iter,
+    memrchr, memrchr2, memrchr2_iter, memrchr3, memrchr3_iter, memrchr_iter,
+    Memchr, Memchr2, Memchr3,
 };
 
 mod cow;
 mod memchr;
-mod memmem;
+pub mod memmem;
 #[cfg(test)]
 mod tests;

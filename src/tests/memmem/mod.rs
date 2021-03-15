@@ -1,2 +1,4 @@
 #[cfg(all(feature = "std", not(miri)))]
-mod twoway;
+mod properties;
+#[cfg(feature = "std")]
+mod simple;
