@@ -220,9 +220,9 @@ impl<'b> TwoWay<'b> {
                 Some(0)
             } else {
                 // We special case a single-byte needle to make things a bit
-                // faster. Our prefilter infrastructure could be made to handle it,
-                // but doing it this way has less overhead. This is particularly
-                // impactful for common bytes.
+                // faster. Our prefilter infrastructure could be made to
+                // handle it, but doing it this way has less overhead. This is
+                // particularly impactful for common bytes.
                 crate::memchr(needle[0], haystack)
             }
         } else if haystack.len() < needle.len() {

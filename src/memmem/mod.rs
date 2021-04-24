@@ -12,6 +12,9 @@ mod prefilter;
 mod rabinkarp;
 mod twoway;
 mod util;
+// SIMD is only supported on x86_64 currently.
+#[cfg(target_arch = "x86_64")]
+mod vector;
 
 /// Returns an iterator over all occurrences of a substring in a haystack.
 ///

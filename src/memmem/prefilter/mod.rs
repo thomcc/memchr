@@ -7,6 +7,7 @@ use crate::memmem::{
 };
 
 mod fallback;
+mod genericsimd;
 #[cfg(all(not(miri), target_arch = "x86_64", memchr_runtime_simd))]
 mod x86;
 
@@ -175,18 +176,19 @@ impl Freqy {
     #[cfg(not(all(not(miri), target_arch = "x86_64", memchr_runtime_simd)))]
     #[inline(always)]
     pub(crate) fn forward(config: &Prefilter, needle: &[u8]) -> Freqy {
-        if let Prefilter::None = *config {
-            return Freqy::inert();
+        let mut ninfo = NeedleInfo::default();
+        let mut inert = false;
+        let mut prefn: PrefilterFn = fallback::find;
+
+        if config.is_none() || needle.len() <= 1 {
+            ninfo.nhash = NeedleHash::new(needle);
+            inert = true;
+        } else {
+            ninfo = NeedleInfo::forward(needle, false);
+            let rare1 = needle[ninfo.rare1i as usize];
+            inert = rank(rare1) > MAX_FALLBACK_RANK;
         }
-        let ninfo = match NeedleInfo::forward(needle, false) {
-            None => return Freqy::inert(),
-            Some(ninfo) => ninfo,
-        };
-        if rank(needle[ninfo.rare1i as usize]) > MAX_FALLBACK_RANK {
-            return Freqy::inert();
-        }
-        let prefn = fallback::find as PrefilterFn;
-        Freqy { ninfo, prefn, inert: false }
+        Freqy { ninfo, prefn, inert }
     }
 
     #[cfg(all(not(miri), target_arch = "x86_64", memchr_runtime_simd))]
@@ -208,7 +210,7 @@ impl Freqy {
                     is_avx = is_x86_feature_detected!("avx2");
                 }
             }
-            ninfo = NeedleInfo::forward(needle, is_sse || is_avx);
+            ninfo = NeedleInfo::forward(needle, false);
             // TODO: This should use x86::sse::find since memchr_runtime_simd
             // implies that SSE2 is enabled. (But we should still check
             // cfg!(memchr_runtime_sse2).)
@@ -227,21 +229,19 @@ impl Freqy {
     /// TODO
     #[inline(always)]
     pub(crate) fn reverse(config: &Prefilter, needle: &[u8]) -> Freqy {
+        let mut ninfo = NeedleInfo::default();
         let mut inert = false;
-        let ninfo = if let Prefilter::None = *config {
+        let mut prefn: PrefilterFn = fallback::rfind;
+
+        if config.is_none() || needle.len() <= 1 {
+            ninfo.nhash = NeedleHash::new(needle);
             inert = true;
-            NeedleInfo { rare1i: 0, rare2i: 0, nhash: NeedleHash::new(needle) }
         } else {
-            let is_avx = is_x86_feature_detected!("avx2");
-            NeedleInfo::reverse(needle, is_avx)
-        };
-        if (ninfo.rare1i as usize) < needle.len() {
+            ninfo = NeedleInfo::reverse(needle, false);
             let rare1 = needle[needle.len() - ninfo.rare1i as usize - 1];
             inert = rank(rare1) > MAX_FALLBACK_RANK;
         }
-        let prefn = fallback::rfind;
-        let reports_false_positives = true;
-        Freqy { ninfo, prefn, inert: false }
+        Freqy { ninfo, prefn, inert }
     }
 
     fn inert() -> Freqy {
