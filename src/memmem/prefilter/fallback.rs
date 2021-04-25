@@ -110,7 +110,7 @@ pub(crate) fn rfind(
     Some(core::cmp::min(haystack.len(), i + rare1i + 1))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 

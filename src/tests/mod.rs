@@ -1,5 +1,4 @@
 mod memchr;
-mod memmem;
 
 // For debugging, particularly in CI, print out the byte order of the current
 // target.

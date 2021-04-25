@@ -208,6 +208,9 @@ impl Freqy {
             {
                 if cfg!(memchr_runtime_avx) {
                     is_avx = is_x86_feature_detected!("avx2");
+                    if is_avx {
+                        prefn = x86::avx::find;
+                    }
                 }
             }
             ninfo = NeedleInfo::forward(needle, false);
@@ -215,7 +218,8 @@ impl Freqy {
             // implies that SSE2 is enabled. (But we should still check
             // cfg!(memchr_runtime_sse2).)
             if is_avx {
-                prefn = x86::avx::find;
+                // set above, since x86::avx is only defined when std
+                // is enabled
             } else if is_sse {
                 prefn = x86::sse::find;
             } else {
@@ -441,16 +445,24 @@ fn rank(b: u8) -> usize {
     BYTE_FREQUENCIES[b as usize] as usize
 }
 
-#[cfg(all(test, not(miri)))]
+#[cfg(all(test, feature = "std", not(miri)))]
 pub(crate) mod tests {
     use std::convert::{TryFrom, TryInto};
 
     use super::*;
 
+    // Below is a small jig that generates prefilter tests. The main purpose
+    // of this jig is to generate tests of varying needle/haystack lengths
+    // in order to try and exercise all code paths in our prefilters. And in
+    // particular, this is especially important for vectorized prefilters where
+    // certain code paths might only be exercised at certain lengths.
+
     /// A test that represents the input and expected output to a prefilter
     /// function. The test should be able to run with any prefilter function
     /// and get the expected output.
     pub(crate) struct PrefilterTest {
+        // These fields represent the inputs and expected output of a forwards
+        // prefilter function.
         pub(crate) ninfo: NeedleInfo,
         pub(crate) haystack: Vec<u8>,
         pub(crate) needle: Vec<u8>,
@@ -458,10 +470,13 @@ pub(crate) mod tests {
     }
 
     impl PrefilterTest {
+        /// Run all generated forward prefilter tests on the given prefn.
         pub(crate) unsafe fn run_all_tests(prefn: PrefilterFn) {
             PrefilterTest::run_all_tests_filter(prefn, |_| true)
         }
 
+        /// Run all generated forward prefilter tests that pass the given
+        /// predicate on the given prefn.
         pub(crate) unsafe fn run_all_tests_filter(
             prefn: PrefilterFn,
             mut predicate: impl FnMut(&PrefilterTest) -> bool,
@@ -475,6 +490,12 @@ pub(crate) mod tests {
             }
         }
 
+        /// Create a new prefilter test from a seed and some chose offsets to
+        /// rare bytes in the seed's needle.
+        ///
+        /// If a valid test could not be constructed, then None is returned.
+        /// (Currently, we take the approach of massaging tests to be valid
+        /// instead of rejecting them outright.)
         fn new(
             seed: &PrefilterTestSeed,
             rare1i: usize,
@@ -485,11 +506,15 @@ pub(crate) mod tests {
         ) -> Option<PrefilterTest> {
             let rare1i: u8 = rare1i.try_into().unwrap();
             let rare2i: u8 = rare2i.try_into().unwrap();
+            // The '#' byte is never used in a haystack (unless we're expecting
+            // a match), while the '@' byte is never used in a needle.
             let mut haystack = vec![b'@'; haystack_len];
             let mut needle = vec![b'#'; needle_len];
             needle[0] = seed.first;
             needle[rare1i as usize] = seed.rare1;
             needle[rare2i as usize] = seed.rare2;
+            // If we're expecting a match, then make sure the needle occurs
+            // in the haystack at the expected position.
             if let Some(i) = output {
                 haystack[i..i + needle.len()].copy_from_slice(&needle);
             }
@@ -511,6 +536,9 @@ pub(crate) mod tests {
             Some(PrefilterTest { ninfo, haystack, needle, output })
         }
 
+        /// Run this specific test on the given prefilter function. If the
+        /// outputs do no match, then this routine panics with a failure
+        /// message.
         unsafe fn run(&self, prefn: PrefilterFn) {
             let mut prestate = PrefilterState::new();
             assert_eq!(
@@ -531,6 +559,15 @@ pub(crate) mod tests {
         }
     }
 
+    /// A set of prefilter test seeds. Each seed serves as the base for the
+    /// generation of many other tests. In essence, the seed captures the
+    /// "rare" and first bytes among our needle. The tests generated from each
+    /// seed essentially vary the length of the needle and haystack, while
+    /// using the rare/first byte configuration from the seed.
+    ///
+    /// The purpose of this is to test many different needle/haystack lengths.
+    /// In particular, some of the vector optimizations might only have bugs
+    /// in haystacks of a certain size.
     const PREFILTER_TEST_SEEDS: &[PrefilterTestSeed] = &[
         PrefilterTestSeed { first: b'x', rare1: b'y', rare2: b'z' },
         PrefilterTestSeed { first: b'x', rare1: b'x', rare2: b'z' },
@@ -539,6 +576,7 @@ pub(crate) mod tests {
         PrefilterTestSeed { first: b'x', rare1: b'y', rare2: b'y' },
     ];
 
+    /// Data that describes a single prefilter test seed.
     struct PrefilterTestSeed {
         first: u8,
         rare1: u8,
@@ -546,6 +584,7 @@ pub(crate) mod tests {
     }
 
     impl PrefilterTestSeed {
+        /// Generate a series of prefilter tests from this seed.
         fn generate(&self) -> Vec<PrefilterTest> {
             let mut tests = vec![];
             let mut push = |test: Option<PrefilterTest>| {
@@ -555,6 +594,9 @@ pub(crate) mod tests {
             };
             let len_start = 2;
             let mut count = 0;
+            // The loop below generates *a lot* of tests. The number of tests
+            // was chosen somewhat empirically to be "bearable" when running
+            // the test suite.
             for needle_len in len_start..=40 {
                 let rare_start = len_start - 1;
                 for rare1i in rare_start..needle_len {
@@ -568,6 +610,8 @@ pub(crate) mod tests {
                                 needle_len,
                                 None,
                             ));
+                            // Test all possible match scenarios for this
+                            // needle and haystack.
                             for output in 0..=(haystack_len - needle_len) {
                                 push(PrefilterTest::new(
                                     self,

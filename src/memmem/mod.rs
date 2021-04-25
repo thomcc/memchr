@@ -7,6 +7,71 @@ TODO
 pub use self::prefilter::Prefilter;
 use self::{prefilter::PrefilterState, twoway::TwoWay};
 
+/// Defines a suite of quickcheck properties for forward and reverse
+/// substring searching.
+///
+/// This is defined in this specific spot so that it can be used freely among
+/// the different substring search implementations. I couldn't be bothered to
+/// fight with the macro-visibility rules enough to figure out how to stuff it
+/// somewhere more convenient.
+#[cfg(all(test, feature = "std"))]
+macro_rules! define_memmem_quickcheck_tests {
+    ($fwd:expr, $rev:expr) => {
+        use crate::memmem::testprops;
+
+        quickcheck::quickcheck! {
+            fn qc_fwd_prefix_is_substring(bs: Vec<u8>) -> bool {
+                testprops::prefix_is_substring(false, &bs, $fwd)
+            }
+
+            fn qc_fwd_suffix_is_substring(bs: Vec<u8>) -> bool {
+                testprops::suffix_is_substring(false, &bs, $fwd)
+            }
+
+            fn qc_fwd_matches_naive(
+                haystack: Vec<u8>,
+                needle: Vec<u8>
+            ) -> bool {
+                testprops::matches_naive(false, &haystack, &needle, $fwd)
+            }
+
+            fn qc_rev_prefix_is_substring(bs: Vec<u8>) -> bool {
+                testprops::prefix_is_substring(true, &bs, $rev)
+            }
+
+            fn qc_rev_suffix_is_substring(bs: Vec<u8>) -> bool {
+                testprops::suffix_is_substring(true, &bs, $rev)
+            }
+
+            fn qc_rev_matches_naive(
+                haystack: Vec<u8>,
+                needle: Vec<u8>
+            ) -> bool {
+                testprops::matches_naive(true, &haystack, &needle, $rev)
+            }
+        }
+    };
+}
+
+/// Defines a suite of "simple" hand-written tests for a substring
+/// implementation.
+#[cfg(test)]
+macro_rules! define_memmem_simple_tests {
+    ($fwd:expr, $rev:expr) => {
+        use crate::memmem::testsimples;
+
+        #[test]
+        fn simple_forward() {
+            testsimples::run_search_tests_fwd($fwd);
+        }
+
+        #[test]
+        fn simple_reverse() {
+            testsimples::run_search_tests_rev($rev);
+        }
+    };
+}
+
 mod byte_frequencies;
 mod prefilter;
 mod rabinkarp;
@@ -560,5 +625,196 @@ impl FinderBuilder {
     pub fn prefilter(&mut self, prefilter: Prefilter) -> &mut FinderBuilder {
         self.config.prefilter = prefilter;
         self
+    }
+}
+
+/// This module defines some generic quickcheck properties useful for testing
+/// any substring search algorithm. It also runs those properties for the
+/// top-level public API memmem routines. (The properties are also used to
+/// test various substring search implementations more granularly elsewhere as
+/// well.)
+#[cfg(all(test, feature = "std", not(miri)))]
+mod testprops {
+    // N.B. This defines the quickcheck tests using the properties defined
+    // below. Because of macro-visibility weirdness, the actual macro is
+    // defined at the top of this file.
+    define_memmem_quickcheck_tests!(super::memmem, super::memrmem);
+
+    /// Check that every prefix of the given byte string is a substring.
+    pub(crate) fn prefix_is_substring(
+        reverse: bool,
+        bs: &[u8],
+        mut search: impl FnMut(&[u8], &[u8]) -> Option<usize>,
+    ) -> bool {
+        if bs.is_empty() {
+            return true;
+        }
+        for i in 0..(bs.len() - 1) {
+            let prefix = &bs[..i];
+            if reverse {
+                assert_eq!(naive_rfind(bs, prefix), search(bs, prefix));
+            } else {
+                assert_eq!(naive_find(bs, prefix), search(bs, prefix));
+            }
+        }
+        true
+    }
+
+    /// Check that every suffix of the given byte string is a substring.
+    pub(crate) fn suffix_is_substring(
+        reverse: bool,
+        bs: &[u8],
+        mut search: impl FnMut(&[u8], &[u8]) -> Option<usize>,
+    ) -> bool {
+        if bs.is_empty() {
+            return true;
+        }
+        for i in 0..(bs.len() - 1) {
+            let suffix = &bs[i..];
+            if reverse {
+                assert_eq!(naive_rfind(bs, suffix), search(bs, suffix));
+            } else {
+                assert_eq!(naive_find(bs, suffix), search(bs, suffix));
+            }
+        }
+        true
+    }
+
+    /// Check that naive substring search matches the result of the given search
+    /// algorithm.
+    pub(crate) fn matches_naive(
+        reverse: bool,
+        haystack: &[u8],
+        needle: &[u8],
+        mut search: impl FnMut(&[u8], &[u8]) -> Option<usize>,
+    ) -> bool {
+        if reverse {
+            naive_rfind(haystack, needle) == search(haystack, needle)
+        } else {
+            naive_find(haystack, needle) == search(haystack, needle)
+        }
+    }
+
+    /// Naively search forwards for the given needle in the given haystack.
+    fn naive_find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        if needle.is_empty() {
+            return Some(0);
+        } else if haystack.len() < needle.len() {
+            return None;
+        }
+        for i in 0..(haystack.len() - needle.len() + 1) {
+            if needle == &haystack[i..i + needle.len()] {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Naively search in reverse for the given needle in the given haystack.
+    fn naive_rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        if needle.is_empty() {
+            return Some(haystack.len());
+        } else if haystack.len() < needle.len() {
+            return None;
+        }
+        for i in (0..(haystack.len() - needle.len() + 1)).rev() {
+            if needle == &haystack[i..i + needle.len()] {
+                return Some(i);
+            }
+        }
+        None
+    }
+}
+
+/// This module defines a bunch of hand-written "simple" substring tests. It
+/// also provides routines for easily running them on any substring search
+/// implementation.
+#[cfg(test)]
+mod testsimples {
+    define_memmem_simple_tests!(super::memmem, super::memrmem);
+
+    /// Each test is a (needle, haystack, expected_fwd, expected_rev) tuple.
+    type SearchTest =
+        (&'static str, &'static str, Option<usize>, Option<usize>);
+
+    const SEARCH_TESTS: &'static [SearchTest] = &[
+        ("", "", Some(0), Some(0)),
+        ("", "a", Some(0), Some(1)),
+        ("", "ab", Some(0), Some(2)),
+        ("", "abc", Some(0), Some(3)),
+        ("a", "", None, None),
+        ("a", "a", Some(0), Some(0)),
+        ("a", "aa", Some(0), Some(1)),
+        ("a", "ba", Some(1), Some(1)),
+        ("a", "bba", Some(2), Some(2)),
+        ("a", "bbba", Some(3), Some(3)),
+        ("a", "bbbab", Some(3), Some(3)),
+        ("a", "bbbabb", Some(3), Some(3)),
+        ("a", "bbbabbb", Some(3), Some(3)),
+        ("a", "bbbbbb", None, None),
+        ("ab", "", None, None),
+        ("ab", "a", None, None),
+        ("ab", "b", None, None),
+        ("ab", "ab", Some(0), Some(0)),
+        ("ab", "aab", Some(1), Some(1)),
+        ("ab", "aaab", Some(2), Some(2)),
+        ("ab", "abaab", Some(0), Some(3)),
+        ("ab", "baaab", Some(3), Some(3)),
+        ("ab", "acb", None, None),
+        ("ab", "abba", Some(0), Some(0)),
+        ("abc", "ab", None, None),
+        ("abc", "abc", Some(0), Some(0)),
+        ("abc", "abcz", Some(0), Some(0)),
+        ("abc", "abczz", Some(0), Some(0)),
+        ("abc", "zabc", Some(1), Some(1)),
+        ("abc", "zzabc", Some(2), Some(2)),
+        ("abc", "azbc", None, None),
+        ("abc", "abzc", None, None),
+        ("abczdef", "abczdefzzzzzzzzzzzzzzzzzzzz", Some(0), Some(0)),
+        ("abczdef", "zzzzzzzzzzzzzzzzzzzzabczdef", Some(20), Some(20)),
+        ("xyz", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxyz", Some(32), Some(32)),
+        // Failures caught by quickcheck.
+        ("\u{0}\u{15}", "\u{0}\u{15}\u{15}\u{0}", Some(0), Some(0)),
+        ("\u{0}\u{1e}", "\u{1e}\u{0}", None, None),
+    ];
+
+    /// Run the substring search tests. `search` should be a closure that
+    /// accepts a haystack and a needle and returns the starting position
+    /// of the first occurrence of needle in the haystack, or `None` if one
+    /// doesn't exist.
+    pub(crate) fn run_search_tests_fwd(
+        mut search: impl FnMut(&[u8], &[u8]) -> Option<usize>,
+    ) {
+        for &(needle, haystack, expected_fwd, _) in SEARCH_TESTS {
+            let (n, h) = (needle.as_bytes(), haystack.as_bytes());
+            assert_eq!(
+                expected_fwd,
+                search(h, n),
+                "needle: {:?}, haystack: {:?}, expected: {:?}",
+                n,
+                h,
+                expected_fwd
+            );
+        }
+    }
+
+    /// Run the substring search tests. `search` should be a closure that
+    /// accepts a haystack and a needle and returns the starting position of
+    /// the last occurrence of needle in the haystack, or `None` if one doesn't
+    /// exist.
+    pub(crate) fn run_search_tests_rev(
+        mut search: impl FnMut(&[u8], &[u8]) -> Option<usize>,
+    ) {
+        for &(needle, haystack, _, expected_rev) in SEARCH_TESTS {
+            let (n, h) = (needle.as_bytes(), haystack.as_bytes());
+            assert_eq!(
+                expected_rev,
+                search(h, n),
+                "needle: {:?}, haystack: {:?}, expected: {:?}",
+                n,
+                h,
+                expected_rev
+            );
+        }
     }
 }

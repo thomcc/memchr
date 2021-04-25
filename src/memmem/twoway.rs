@@ -807,6 +807,18 @@ mod tests {
 
     use super::*;
 
+    fn twoway_find_nopre(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        let config = Config { prefilter: Prefilter::None };
+        TwoWay::forward(config, needle).find(haystack)
+    }
+
+    fn twoway_rfind_nopre(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        let config = Config { prefilter: Prefilter::None };
+        TwoWay::reverse(config, needle).rfind(haystack)
+    }
+
+    define_memmem_simple_tests!(twoway_find_nopre, twoway_rfind_nopre);
+
     /// Convenience wrapper for computing the suffix as a byte string.
     fn get_suffix_forward(needle: &[u8], kind: SuffixKind) -> (&[u8], usize) {
         let s = Suffix::forward(needle, kind);
