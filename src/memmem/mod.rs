@@ -2,6 +2,8 @@
 TODO
 */
 
+#![allow(warnings)]
+
 pub use self::prefilter::Prefilter;
 use self::prefilter::PrefilterState;
 
@@ -76,6 +78,7 @@ macro_rules! define_memmem_simple_tests {
 mod byte_frequencies;
 mod prefilter;
 mod rabinkarp;
+mod rarebytes;
 mod twoway;
 mod util;
 // SIMD is only supported on x86_64 currently.

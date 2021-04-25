@@ -292,6 +292,7 @@ impl core::fmt::Debug for Freqy {
         f.debug_struct("Freqy")
             .field("ninfo", &self.ninfo)
             .field("prefn", &"<fn(...)>")
+            .field("inert", &self.inert)
             .finish()
     }
 }
