@@ -1,5 +1,3 @@
-use core::mem::size_of;
-
 pub(crate) trait Vector: Copy + core::fmt::Debug {
     unsafe fn splat(byte: u8) -> Self;
     unsafe fn load_unaligned(data: *const u8) -> Self;

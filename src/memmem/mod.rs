@@ -2,10 +2,8 @@
 TODO
 */
 
-#![allow(warnings)]
-
 pub use self::prefilter::Prefilter;
-use self::{prefilter::PrefilterState, twoway::TwoWay};
+use self::prefilter::PrefilterState;
 
 /// Defines a suite of quickcheck properties for forward and reverse
 /// substring searching.
@@ -55,6 +53,9 @@ macro_rules! define_memmem_quickcheck_tests {
 
 /// Defines a suite of "simple" hand-written tests for a substring
 /// implementation.
+///
+/// This is defined here for the same reason that
+/// define_memmem_quickcheck_tests is defined here.
 #[cfg(test)]
 macro_rules! define_memmem_simple_tests {
     ($fwd:expr, $rev:expr) => {
@@ -214,7 +215,11 @@ pub fn memmem(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// ```
 #[inline]
 pub fn memrmem(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    FinderRev::new(needle).rfind(haystack)
+    if haystack.len() < 64 {
+        rabinkarp::rfind(haystack, needle)
+    } else {
+        FinderRev::new(needle).rfind(haystack)
+    }
 }
 
 /// An iterator over non-overlapping substring matches.
@@ -273,7 +278,6 @@ impl<'h, 'n> Iterator for Memmem<'h, 'n> {
 #[derive(Debug)]
 pub struct Memrmem<'h, 'n> {
     haystack: &'h [u8],
-    prestate: PrefilterState,
     finder: FinderRev<'n>,
     /// When searching with an empty needle, this gets set to `None` after
     /// we've yielded the last element at `0`.
@@ -286,9 +290,8 @@ impl<'h, 'n> Memrmem<'h, 'n> {
         haystack: &'h [u8],
         finder: FinderRev<'n>,
     ) -> Memrmem<'h, 'n> {
-        let prestate = finder.searcher.prefilter_state();
         let pos = Some(haystack.len());
-        Memrmem { haystack, prestate, finder, pos }
+        Memrmem { haystack, finder, pos }
     }
 }
 
@@ -301,8 +304,7 @@ impl<'h, 'n> Iterator for Memrmem<'h, 'n> {
             None => return None,
             Some(pos) => pos,
         };
-        let result =
-            self.finder.rfind_with(&mut self.prestate, &self.haystack[..pos]);
+        let result = self.finder.rfind(&self.haystack[..pos]);
         match result {
             None => None,
             Some(i) => {
@@ -332,7 +334,7 @@ impl<'h, 'n> Iterator for Memrmem<'h, 'n> {
 /// the lifetime of its needle.
 #[derive(Clone, Debug)]
 pub struct Finder<'n> {
-    searcher: TwoWay<'n>,
+    searcher: twoway::Forward<'n>,
 }
 
 impl<'n> Finder<'n> {
@@ -465,7 +467,7 @@ impl<'n> Finder<'n> {
 /// the lifetime of its needle.
 #[derive(Clone, Debug)]
 pub struct FinderRev<'n> {
-    searcher: TwoWay<'n>,
+    searcher: twoway::Reverse<'n>,
 }
 
 impl<'n> FinderRev<'n> {
@@ -580,15 +582,6 @@ impl<'n> FinderRev<'n> {
     pub fn needle(&self) -> &[u8] {
         self.searcher.needle()
     }
-
-    #[inline]
-    fn rfind_with(
-        &self,
-        prestate: &mut PrefilterState,
-        haystack: &[u8],
-    ) -> Option<usize> {
-        self.searcher.rfind_with(prestate, haystack)
-    }
 }
 
 /// A builder for constructing non-default forward or reverse memmem finders.
@@ -609,7 +602,7 @@ impl FinderBuilder {
         &self,
         needle: &'n B,
     ) -> Finder<'n> {
-        Finder { searcher: TwoWay::forward(self.config, needle.as_ref()) }
+        Finder { searcher: twoway::Forward::new(self.config, needle.as_ref()) }
     }
 
     /// Build a reverse finder using the given needle from the current
@@ -618,7 +611,7 @@ impl FinderBuilder {
         &self,
         needle: &'n B,
     ) -> FinderRev<'n> {
-        FinderRev { searcher: TwoWay::reverse(self.config, needle.as_ref()) }
+        FinderRev { searcher: twoway::Reverse::new(needle.as_ref()) }
     }
 
     /// Configure the prefilter setting for the finder.

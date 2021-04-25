@@ -18,7 +18,7 @@ pub(crate) unsafe fn find(
     // rarely exercised, since a higher level routine will probably dispatch to
     // Rabin-Karp for such a small haystack.)
     fn simple_memchr_fallback(
-        prestate: &mut PrefilterState,
+        _prestate: &mut PrefilterState,
         ninfo: &NeedleInfo,
         haystack: &[u8],
         needle: &[u8],
@@ -37,8 +37,6 @@ pub(crate) unsafe fn find(
 
 #[cfg(all(test, feature = "std"))]
 mod tests {
-    use super::*;
-
     #[test]
     #[cfg(not(miri))]
     fn prefilter_permutations() {

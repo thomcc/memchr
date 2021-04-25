@@ -28,6 +28,14 @@ use crate::memmem::{
 /// # Panics
 ///
 /// If `needle.len() <= 1`, then this panics.
+///
+/// # Safety
+///
+/// Since this is meant to be used with vector functions, callers need to
+/// specialize this inside of a function with a `target_feature` attribute.
+/// Therefore, callers must ensure that whatever target feature is being used
+/// supports the vector functions that this function is specialized for. (For
+/// the specific vector functions used, see the Vector trait implementations.)
 #[inline(always)]
 pub(crate) unsafe fn find<V: Vector>(
     prestate: &mut PrefilterState,
@@ -100,7 +108,6 @@ pub(crate) unsafe fn find<V: Vector>(
 ///
 /// rare1chunk and rare2chunk correspond to vectors with the rare1 and rare2
 /// bytes repeated in each 8-bit lane, respectively.
-#[allow(dead_code)]
 #[inline(always)]
 unsafe fn find_in_chunk2<V: Vector>(
     ptr: *const u8,

@@ -55,7 +55,7 @@ mod tests {
             return None;
         }
         let mut prestate = PrefilterState::new();
-        let nhash = rabinkarp::NeedleHash::new(needle.as_bytes());
+        let nhash = rabinkarp::NeedleHash::forward(needle.as_bytes());
         let ninfo = NeedleInfo { rare1i, rare2i, nhash };
         // SAFETY: The safety of super::find only requires that the current
         // CPU support AVX2, which we checked above.
