@@ -32,7 +32,7 @@ https://github.com/BurntSushi/aho-corasick/blob/3852632f10587db0ff72ef29e88d58bf
 */
 
 /// Whether RK is believed to be very fast for the given needle/haystack.
-pub(crate) fn is_fast(haystack: &[u8], needle: &[u8]) -> bool {
+pub(crate) fn is_fast(haystack: &[u8], _needle: &[u8]) -> bool {
     haystack.len() < 16
 }
 
@@ -225,5 +225,9 @@ fn is_suffix(haystack: &[u8], needle: &[u8]) -> bool {
 #[cfg(test)]
 mod simpletests {
     define_memmem_simple_tests!(super::find, super::rfind);
+}
+
+#[cfg(all(test, feature = "std", not(miri)))]
+mod proptests {
     define_memmem_quickcheck_tests!(super::find, super::rfind);
 }

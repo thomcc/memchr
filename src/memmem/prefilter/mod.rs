@@ -1,5 +1,3 @@
-use core::mem;
-
 use crate::memmem::{rarebytes::RareNeedleBytes, NeedleInfo};
 
 mod fallback;
@@ -7,27 +5,73 @@ mod genericsimd;
 #[cfg(all(not(miri), target_arch = "x86_64", memchr_runtime_simd))]
 mod x86;
 
-/// The maximum frequency rank permitted. If the rarest byte in the needle
-/// has a frequency rank above this value, then Freqy is not used.
+/// The maximum frequency rank permitted for the fallback prefilter. If the
+/// rarest byte in the needle has a frequency rank above this value, then no
+/// prefilter is used if the fallback prefilter would otherwise be selected.
 const MAX_FALLBACK_RANK: usize = 250;
+
+/// A combination of prefilter effectiveness state, the prefilter function and
+/// the needle info required to run a prefilter.
+///
+/// For the most part, these are grouped into a single type for convenience,
+/// instead of needing to pass around all three as distinct function
+/// parameters.
+pub(crate) struct Pre<'a> {
+    /// State that tracks the effectivess of a prefilter.
+    pub(crate) state: &'a mut PrefilterState,
+    /// The actual prefilter function.
+    pub(crate) prefn: PrefilterFn,
+    /// Information about a needle, such as its RK hash and rare byte offsets.
+    pub(crate) ninfo: &'a NeedleInfo,
+}
+
+impl<'a> Pre<'a> {
+    /// Call this prefilter on the given haystack with the given needle.
+    #[inline(always)]
+    pub(crate) fn call(
+        &mut self,
+        haystack: &[u8],
+        needle: &[u8],
+    ) -> Option<usize> {
+        self.prefn.call(self.state, self.ninfo, haystack, needle)
+    }
+
+    /// Return true if and only if this prefilter should be used.
+    #[inline(always)]
+    pub(crate) fn should_call(&mut self) -> bool {
+        self.state.is_effective()
+    }
+}
+
+/// A prefilter function.
+///
+/// A prefilter function describes both forward and reverse searches.
+/// (Although, we don't currently implement prefilters for reverse searching.)
+/// In the case of a forward search, the position returned corresponds to
+/// the starting offset of a match (confirmed or possible). Its minimum
+/// value is `0`, and its maximum value is `haystack.len() - 1`. In the case
+/// of a reverse search, the position returned corresponds to the position
+/// immediately after a match (confirmed or possible). Its minimum value is `1`
+/// and its maximum value is `haystack.len()`.
+///
+/// In both cases, the position returned is the starting (or ending) point of a
+/// _possible_ match. That is, returning a false positive is okay. A prefilter,
+/// however, must never return any false negatives. That is, if a match exists
+/// at a particular position `i`, then a prefilter _must_ return that position.
+/// It cannot skip past it.
+///
+/// # Safety
+///
+/// A prefilter function is unsafe to create, since not all prefilters are
+/// safe to call in all contexts. (e.g., A prefilter that uses AVX instructions
+/// may only be called on x86_64 CPUs with the relevant AVX feature enabled.)
+/// Thus, callers must ensure that when a prefilter function is created that it
+/// is safe to call for the current environment.
+#[derive(Clone, Copy)]
+pub(crate) struct PrefilterFn(PrefilterFnTy);
 
 /// The type of a prefilter function. All prefilters must satisfy this
 /// signature.
-///
-/// A prefilter function describes both forward and reverse searches. In the
-/// case of a forward search, the position returned corresponds to the starting
-/// offset of a match (confirmed or possible). Its minimum value is `0`, and
-/// its maximum value is `haystack.len() - 1`. In the case of a reverse search,
-/// the position returned corresponds to the position immediately after a match
-/// (confirmed or possible). Its minimum value is `1` and its maximum value is
-/// `haystack.len()`.
-///
-/// In both cases, the position returned is either a confirmed match (in the
-/// case where a prefilter can determine a full match) or is the starting
-/// point of a _possible_ match. That is, returning a false positive is okay.
-/// A prefilter, however, must never return any false negatives. That is, if a
-/// match exists at a particular position `i`, then a prefilter _must_ return
-/// that position. It cannot skip past it.
 ///
 /// Using a function pointer like this does inhibit inlining, but it does
 /// eliminate branching and the extra costs associated with copying a larger
@@ -38,9 +82,6 @@ const MAX_FALLBACK_RANK: usize = 250;
 /// which generally won't be inlineable into the surrounding code anyway.
 /// (Unless AVX2 is enabled at compile time, but this is typically rare, since
 /// it produces a non-portable binary.)
-#[derive(Clone, Copy)]
-pub(crate) struct PrefilterFn(PrefilterFnTy);
-
 pub(crate) type PrefilterFnTy = unsafe fn(
     prestate: &mut PrefilterState,
     ninfo: &NeedleInfo,
@@ -49,10 +90,19 @@ pub(crate) type PrefilterFnTy = unsafe fn(
 ) -> Option<usize>;
 
 impl PrefilterFn {
+    /// Create a new prefilter function from the function pointer given.
+    ///
+    /// # Safety
+    ///
+    /// Callers must ensure that the given prefilter function is safe to call
+    /// for all inputs in the current environment. For example, if the given
+    /// prefilter function uses AVX instructions, then the caller must ensure
+    /// that the appropriate AVX CPU features are enabled.
     pub(crate) unsafe fn new(prefn: PrefilterFnTy) -> PrefilterFn {
         PrefilterFn(prefn)
     }
 
+    /// Call the underlying prefilter function with the given arguments.
     pub fn call(
         self,
         prestate: &mut PrefilterState,
@@ -60,6 +110,8 @@ impl PrefilterFn {
         haystack: &[u8],
         needle: &[u8],
     ) -> Option<usize> {
+        // SAFETY: Callers have the burden of ensuring that a prefilter
+        // function is safe to call for all inputs in the current environment.
         unsafe { (self.0)(prestate, ninfo, haystack, needle) }
     }
 }
@@ -211,23 +263,11 @@ impl PrefilterState {
     }
 }
 
-#[cfg(not(all(not(miri), target_arch = "x86_64", memchr_runtime_simd)))]
-#[inline(always)]
-pub(crate) fn forward(
-    config: &Prefilter,
-    rare: &RareNeedleBytes,
-    needle: &[u8],
-) -> Option<PrefilterFn> {
-    if config.is_none() || needle.len() <= 1 {
-        return None;
-    }
-    let (rare1, _) = rare.as_rare_bytes(needle);
-    if rank(needle[rare1 as usize]) <= MAX_FALLBACK_RANK {
-        return Some(PrefilterFn(fallback::find));
-    }
-    None;
-}
-
+/// Determine which prefilter function, if any, to use.
+///
+/// This only applies to x86_64 when runtime SIMD detection is enabled (which
+/// is the default). In general, we try to use an AVX prefilter, followed by
+/// SSE and then followed by a generic one based on memchr.
 #[cfg(all(not(miri), target_arch = "x86_64", memchr_runtime_simd))]
 #[inline(always)]
 pub(crate) fn forward(
@@ -243,16 +283,46 @@ pub(crate) fn forward(
     {
         if cfg!(memchr_runtime_avx) {
             if is_x86_feature_detected!("avx2") {
+                // SAFETY: x86::avx::find only requires the avx2 feature,
+                // which we've just checked above.
                 return unsafe { Some(PrefilterFn::new(x86::avx::find)) };
             }
         }
     }
     if cfg!(memchr_runtime_sse2) {
-        return Some(PrefilterFn(x86::sse::find));
+        // SAFETY: x86::sse::find only requires the sse2 feature, which is
+        // guaranteed to be available on x86_64.
+        return unsafe { Some(PrefilterFn::new(x86::sse::find)) };
+    }
+    // Check that our rarest byte has a reasonably low rank. The main issue
+    // here is that the fallback prefilter can perform pretty poorly if it's
+    // given common bytes. So we try to avoid the worst cases here.
+    let (rare1_rank, _) = rare.as_ranks(needle);
+    if rare1_rank <= MAX_FALLBACK_RANK {
+        // SAFETY: fallback::find is safe to call in all environments.
+        return unsafe { Some(PrefilterFn::new(fallback::find)) };
+    }
+    None
+}
+
+/// Determine which prefilter function, if any, to use.
+///
+/// Since SIMD is currently only supported on x86_64, this will just select
+/// the fallback prefilter if the rare bytes provided have a low enough rank.
+#[cfg(not(all(not(miri), target_arch = "x86_64", memchr_runtime_simd)))]
+#[inline(always)]
+pub(crate) fn forward(
+    config: &Prefilter,
+    rare: &RareNeedleBytes,
+    needle: &[u8],
+) -> Option<PrefilterFn> {
+    if config.is_none() || needle.len() <= 1 {
+        return None;
     }
     let (rare1_rank, _) = rare.as_ranks(needle);
     if rare1_rank <= MAX_FALLBACK_RANK {
-        return Some(PrefilterFn(fallback::find));
+        // SAFETY: fallback::find is safe to call in all environments.
+        return unsafe { Some(PrefilterFn::new(fallback::find)) };
     }
     None
 }
@@ -260,6 +330,14 @@ pub(crate) fn forward(
 /// Return the minimum length of the haystack in which a prefilter should be
 /// used. If the haystack is below this length, then it's probably not worth
 /// the overhead of running the prefilter.
+///
+/// We used to look at the length of a haystack here. That is, if it was too
+/// small, then don't bother with the prefilter. But two things changed:
+/// the prefilter falls back to memchr for small haystacks, and, at the
+/// meta-searcher level, Rabin-Karp is employed for tiny haystacks anyway.
+///
+/// We keep it around for now in case we want to bring it back.
+#[allow(dead_code)]
 pub(crate) fn minimum_len(_haystack: &[u8], needle: &[u8]) -> usize {
     // If the haystack length isn't greater than needle.len() * FACTOR, then
     // no prefilter will be used. The presumption here is that since there

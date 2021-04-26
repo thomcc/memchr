@@ -20,9 +20,11 @@ provides its own implementation of `memrchr` as well, on top of `memchr2`,
 instead of one. Similarly for `memchr3`.
 */
 
-#![cfg_attr(not(feature = "std"), no_std)]
 #![deny(missing_docs)]
-#![doc(html_root_url = "https://docs.rs/memchr/2.0.0")]
+#![cfg_attr(not(feature = "std"), no_std)]
+// It's not worth trying to gate all code on just miri, so turn off relevant
+// dead code warnings.
+#![cfg_attr(miri, allow(dead_code, unused_macros))]
 
 // Supporting 8-bit (or others) would be fine. If you need it, please submit a
 // bug report at https://github.com/BurntSushi/rust-memchr

@@ -1,6 +1,7 @@
 // These routines are meant to be optimized specifically for low latency as
 // compared to the equivalent routines offered by std. (Which may invoke the
-// dynamic linker and call out to libc.)
+// dynamic linker and call out to libc, which introduces a bit more latency
+// than we'd like.)
 
 /// Returns true if and only if needle is a prefix of haystack.
 #[inline(always)]
@@ -55,21 +56,22 @@ pub(crate) fn memcmp(x: &[u8], y: &[u8]) -> bool {
     // is a hypothesis and is only loosely supported by benchmarks. There's
     // likely some improvement that could be made here. The main thing here
     // though is to optimize for latency, not throughput.
-    let mut px = x.as_ptr();
-    let mut py = y.as_ptr();
-    let pxend = x[x.len() - 4..].as_ptr();
-    let pyend = y[y.len() - 4..].as_ptr();
-    // SAFETY: Via the conditional above, we know that both `p1` and `p2`
-    // have the same length, so `p1 < p1end` implies that `p2 < p2end`.
-    // Thus, derefencing both `p1` and `p2` in the loop below is safe.
+
+    // SAFETY: Via the conditional above, we know that both `px` and `py`
+    // have the same length, so `px < pxend` implies that `py < pyend`.
+    // Thus, derefencing both `px` and `py` in the loop below is safe.
     //
-    // Moreover, we set `p1end` and `p2end` to be 4 bytes before the actual
-    // end of of `p1` and `p2`. Thus, the final dereference outside of the
-    // loop is guaranteed to be valid.
+    // Moreover, we set `pxend` and `pyend` to be 4 bytes before the actual
+    // end of of `px` and `py`. Thus, the final dereference outside of the
+    // loop is guaranteed to be valid. (The final comparison will overlap with
+    // the last comparison done in the loop for lengths that aren't multiples
+    // of four.)
     //
     // Finally, we needn't worry about alignment here, since we do unaligned
     // loads.
     unsafe {
+        let (mut px, mut py) = (x.as_ptr(), y.as_ptr());
+        let (pxend, pyend) = (px.add(x.len() - 4), py.add(y.len() - 4));
         while px < pxend {
             let vx = (px as *const u32).read_unaligned();
             let vy = (py as *const u32).read_unaligned();

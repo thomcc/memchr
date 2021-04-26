@@ -1,12 +1,6 @@
 use core::cmp;
 
-use crate::{
-    cow::CowBytes,
-    memmem::{
-        prefilter::{self, PrefilterFn, PrefilterState},
-        rabinkarp, util, NeedleInfo,
-    },
-};
+use crate::memmem::{prefilter::Pre, util};
 
 /// Two-Way search in the forward direction.
 #[derive(Clone, Copy, Debug)]
@@ -112,9 +106,7 @@ impl Forward {
     #[inline(always)]
     pub(crate) fn find(
         &self,
-        prestate: &mut PrefilterState,
-        prefn: Option<PrefilterFn>,
-        ninfo: &NeedleInfo,
+        pre: Option<&mut Pre<'_>>,
         haystack: &[u8],
         needle: &[u8],
     ) -> Option<usize> {
@@ -123,40 +115,10 @@ impl Forward {
 
         match self.0.shift {
             Shift::Small { period } => {
-                if let Some(prefn) =
-                    should_prefilter(prestate, prefn, haystack, needle)
-                {
-                    self.find_small_imp(
-                        prestate,
-                        Some(prefn),
-                        ninfo,
-                        haystack,
-                        needle,
-                        period,
-                    )
-                } else {
-                    self.find_small_imp(
-                        prestate, None, ninfo, haystack, needle, period,
-                    )
-                }
+                self.find_small_imp(pre, haystack, needle, period)
             }
             Shift::Large { shift } => {
-                if let Some(prefn) =
-                    should_prefilter(prestate, prefn, haystack, needle)
-                {
-                    self.find_large_imp(
-                        prestate,
-                        Some(prefn),
-                        ninfo,
-                        haystack,
-                        needle,
-                        shift,
-                    )
-                } else {
-                    self.find_large_imp(
-                        prestate, None, ninfo, haystack, needle, shift,
-                    )
-                }
+                self.find_large_imp(pre, haystack, needle, shift)
             }
         }
     }
@@ -167,9 +129,7 @@ impl Forward {
     #[cfg(test)]
     fn find_general(
         &self,
-        prestate: &mut PrefilterState,
-        prefn: Option<PrefilterFn>,
-        ninfo: &NeedleInfo,
+        pre: Option<&mut Pre<'_>>,
         haystack: &[u8],
         needle: &[u8],
     ) -> Option<usize> {
@@ -178,21 +138,20 @@ impl Forward {
         } else if haystack.len() < needle.len() {
             None
         } else {
-            self.find(prestate, prefn, ninfo, haystack, needle)
+            self.find(pre, haystack, needle)
         }
     }
 
     // Each of the two search implementations below can be accelerated by a
     // prefilter, but it is not always enabled. To avoid its overhead when
     // its disabled, we explicitly inline each search implementation based on
-    // whether a prefilter will be used or not.
+    // whether a prefilter will be used or not. The decision on which to use
+    // is made in the parent meta searcher.
 
     #[inline(always)]
     fn find_small_imp(
         &self,
-        prestate: &mut PrefilterState,
-        prefn: Option<PrefilterFn>,
-        ninfo: &NeedleInfo,
+        mut pre: Option<&mut Pre<'_>>,
         haystack: &[u8],
         needle: &[u8],
         period: usize,
@@ -202,14 +161,9 @@ impl Forward {
         let mut shift = 0;
         while pos + needle.len() <= haystack.len() {
             let mut i = cmp::max(self.0.critical_pos, shift);
-            if let Some(prefn) = prefn {
-                if prestate.is_effective() {
-                    pos += prefn.call(
-                        prestate,
-                        ninfo,
-                        &haystack[pos..],
-                        needle,
-                    )?;
+            if let Some(pre) = pre.as_mut() {
+                if pre.should_call() {
+                    pos += pre.call(&haystack[pos..], needle)?;
                     shift = 0;
                     i = self.0.critical_pos;
                     if pos + needle.len() > haystack.len() {
@@ -246,9 +200,7 @@ impl Forward {
     #[inline(always)]
     fn find_large_imp(
         &self,
-        prestate: &mut PrefilterState,
-        prefn: Option<PrefilterFn>,
-        ninfo: &NeedleInfo,
+        mut pre: Option<&mut Pre<'_>>,
         haystack: &[u8],
         needle: &[u8],
         shift: usize,
@@ -256,14 +208,9 @@ impl Forward {
         let last_byte = needle.len() - 1;
         let mut pos = 0;
         'outer: while pos + needle.len() <= haystack.len() {
-            if let Some(prefn) = prefn {
-                if prestate.is_effective() {
-                    pos += prefn.call(
-                        prestate,
-                        ninfo,
-                        &haystack[pos..],
-                        needle,
-                    )?;
+            if let Some(pre) = pre.as_mut() {
+                if pre.should_call() {
+                    pos += pre.call(&haystack[pos..], needle)?;
                     if pos + needle.len() > haystack.len() {
                         return None;
                     }
@@ -717,23 +664,6 @@ impl ApproximateByteSet {
     }
 }
 
-/// Return true if and only if a prefilter should be used given the current
-/// prefilter state, haystack and needle.
-fn should_prefilter(
-    prestate: &mut PrefilterState,
-    prefn: Option<PrefilterFn>,
-    haystack: &[u8],
-    needle: &[u8],
-) -> Option<PrefilterFn> {
-    if !prestate.is_effective() {
-        return None;
-    }
-    if haystack.len() < prefilter::minimum_len(haystack, needle) {
-        return None;
-    }
-    prefn
-}
-
 #[cfg(all(test, feature = "std", not(miri)))]
 mod tests {
     use quickcheck::quickcheck;
@@ -921,16 +851,7 @@ mod simpletests {
         haystack: &[u8],
         needle: &[u8],
     ) -> Option<usize> {
-        let mut prestate = PrefilterState::inert();
-        let prefn = None;
-        let ninfo = NeedleInfo::new(needle);
-        Forward::new(needle).find_general(
-            &mut prestate,
-            prefn,
-            &ninfo,
-            haystack,
-            needle,
-        )
+        Forward::new(needle).find_general(None, haystack, needle)
     }
 
     pub(crate) fn twoway_rfind(

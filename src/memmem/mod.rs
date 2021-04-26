@@ -2,14 +2,14 @@
 TODO
 */
 
-#![allow(warnings)]
+// #![allow(warnings)]
 
 pub use self::prefilter::Prefilter;
 
 use crate::{
     cow::CowBytes,
     memmem::{
-        prefilter::{PrefilterFn, PrefilterState},
+        prefilter::{Pre, PrefilterFn, PrefilterState},
         rabinkarp::NeedleHash,
         rarebytes::RareNeedleBytes,
     },
@@ -25,37 +25,37 @@ use crate::{
 #[cfg(all(test, feature = "std"))]
 macro_rules! define_memmem_quickcheck_tests {
     ($fwd:expr, $rev:expr) => {
-        use crate::memmem::testprops;
+        use crate::memmem::proptests;
 
         quickcheck::quickcheck! {
             fn qc_fwd_prefix_is_substring(bs: Vec<u8>) -> bool {
-                testprops::prefix_is_substring(false, &bs, $fwd)
+                proptests::prefix_is_substring(false, &bs, $fwd)
             }
 
             fn qc_fwd_suffix_is_substring(bs: Vec<u8>) -> bool {
-                testprops::suffix_is_substring(false, &bs, $fwd)
+                proptests::suffix_is_substring(false, &bs, $fwd)
             }
 
             fn qc_fwd_matches_naive(
                 haystack: Vec<u8>,
                 needle: Vec<u8>
             ) -> bool {
-                testprops::matches_naive(false, &haystack, &needle, $fwd)
+                proptests::matches_naive(false, &haystack, &needle, $fwd)
             }
 
             fn qc_rev_prefix_is_substring(bs: Vec<u8>) -> bool {
-                testprops::prefix_is_substring(true, &bs, $rev)
+                proptests::prefix_is_substring(true, &bs, $rev)
             }
 
             fn qc_rev_suffix_is_substring(bs: Vec<u8>) -> bool {
-                testprops::suffix_is_substring(true, &bs, $rev)
+                proptests::suffix_is_substring(true, &bs, $rev)
             }
 
             fn qc_rev_matches_naive(
                 haystack: Vec<u8>,
                 needle: Vec<u8>
             ) -> bool {
-                testprops::matches_naive(true, &haystack, &needle, $rev)
+                proptests::matches_naive(true, &haystack, &needle, $rev)
             }
         }
     };
@@ -632,8 +632,6 @@ impl FinderBuilder {
 /// algorithm employed to do substring search may change.
 #[derive(Clone, Debug)]
 struct Searcher<'n> {
-    /// The configuration for this searcher.
-    config: SearcherConfig,
     /// The actual needle we're searching for.
     ///
     /// A CowBytes is like a Cow<[u8]>, except in no_std environments, it is
@@ -652,6 +650,9 @@ struct Searcher<'n> {
 }
 
 /// A collection of facts computed about a search needle.
+///
+/// We group these things together because it's useful to be able to hand them
+/// to prefilters or substring algorithms that want them.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NeedleInfo {
     /// The offsets of "rare" bytes detected in the needle.
@@ -713,7 +714,7 @@ impl<'n> Searcher<'n> {
         } else {
             TwoWay(twoway::Forward::new(needle))
         };
-        Searcher { config, needle: CowBytes::new(needle), ninfo, prefn, kind }
+        Searcher { needle: CowBytes::new(needle), ninfo, prefn, kind }
     }
 
     /// Return a fresh prefilter state that can be used with this searcher.
@@ -746,7 +747,6 @@ impl<'n> Searcher<'n> {
             TwoWay(tw) => TwoWay(tw),
         };
         Searcher {
-            config: self.config,
             needle: CowBytes::new(self.needle()),
             ninfo: self.ninfo,
             prefn: self.prefn,
@@ -754,6 +754,7 @@ impl<'n> Searcher<'n> {
         }
     }
 
+    #[cfg(feature = "std")]
     fn into_owned(self) -> Searcher<'static> {
         use self::SearcherKind::*;
 
@@ -763,7 +764,6 @@ impl<'n> Searcher<'n> {
             TwoWay(tw) => TwoWay(tw),
         };
         Searcher {
-            config: self.config,
             needle: self.needle.into_owned(),
             ninfo: self.ninfo,
             prefn: self.prefn,
@@ -771,10 +771,13 @@ impl<'n> Searcher<'n> {
         }
     }
 
+    /// Implements forward substring search by selecting the implementation
+    /// chosen at construction and executing it on the given haystack with the
+    /// prefilter's current state of effectiveness.
     #[inline(always)]
     fn find(
         &self,
-        prestate: &mut PrefilterState,
+        state: &mut PrefilterState,
         haystack: &[u8],
     ) -> Option<usize> {
         use self::SearcherKind::*;
@@ -790,15 +793,43 @@ impl<'n> Searcher<'n> {
                 // For very short haystacks (e.g., where the prefilter probably
                 // can't run), it's faster to just run RK.
                 if rabinkarp::is_fast(haystack, needle) {
-                    return rabinkarp::find_with(
-                        &self.ninfo.nhash,
-                        haystack,
-                        needle,
-                    );
+                    rabinkarp::find_with(&self.ninfo.nhash, haystack, needle)
+                } else {
+                    self.find_tw(tw, state, haystack, needle)
                 }
-                tw.find(prestate, self.prefn, &self.ninfo, haystack, needle)
             }
         }
+    }
+
+    /// Calls Two-Way on the given haystack/needle.
+    ///
+    /// This is marked as unlineable since it seems to have a better overall
+    /// effect on benchmarks. However, this is one of those cases where
+    /// inlining it results an improvement in other benchmarks too, so I
+    /// suspect we just don't have enough data yet to make the right call here.
+    ///
+    /// I suspect the main problem is that this function contains two different
+    /// inlined copies of Two-Way: one with and one without prefilters enabled.
+    #[inline(never)]
+    fn find_tw(
+        &self,
+        tw: &twoway::Forward,
+        state: &mut PrefilterState,
+        haystack: &[u8],
+        needle: &[u8],
+    ) -> Option<usize> {
+        if let Some(prefn) = self.prefn {
+            // We used to look at the length of a haystack here. That is, if
+            // it was too small, then don't bother with the prefilter. But two
+            // things changed: the prefilter falls back to memchr for small
+            // haystacks, and, above, Rabin-Karp is employed for tiny haystacks
+            // anyway.
+            if state.is_effective() {
+                let mut pre = Pre { state, prefn, ninfo: &self.ninfo };
+                return tw.find(Some(&mut pre), haystack, needle);
+            }
+        }
+        tw.find(None, haystack, needle)
     }
 }
 
@@ -879,6 +910,7 @@ impl<'n> SearcherRev<'n> {
         }
     }
 
+    #[cfg(feature = "std")]
     fn into_owned(self) -> SearcherRev<'static> {
         use self::SearcherRevKind::*;
 
@@ -894,6 +926,9 @@ impl<'n> SearcherRev<'n> {
         }
     }
 
+    /// Implements reverse substring search by selecting the implementation
+    /// chosen at construction and executing it on the given haystack with the
+    /// prefilter's current state of effectiveness.
     #[inline(always)]
     fn rfind(&self, haystack: &[u8]) -> Option<usize> {
         use self::SearcherRevKind::*;
@@ -909,13 +944,10 @@ impl<'n> SearcherRev<'n> {
                 // For very short haystacks (e.g., where the prefilter probably
                 // can't run), it's faster to just run RK.
                 if rabinkarp::is_fast(haystack, needle) {
-                    return rabinkarp::rfind_with(
-                        &self.nhash,
-                        haystack,
-                        needle,
-                    );
+                    rabinkarp::rfind_with(&self.nhash, haystack, needle)
+                } else {
+                    tw.rfind(haystack, needle)
                 }
-                tw.rfind(haystack, needle)
             }
         }
     }
@@ -927,7 +959,7 @@ impl<'n> SearcherRev<'n> {
 /// test various substring search implementations more granularly elsewhere as
 /// well.)
 #[cfg(all(test, feature = "std", not(miri)))]
-mod testprops {
+mod proptests {
     // N.B. This defines the quickcheck tests using the properties defined
     // below. Because of macro-visibility weirdness, the actual macro is
     // defined at the top of this file.

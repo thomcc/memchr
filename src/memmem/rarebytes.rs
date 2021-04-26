@@ -37,7 +37,7 @@ pub(crate) struct RareNeedleBytes {
 impl RareNeedleBytes {
     /// Create a new pair of rare needle bytes with the given offsets. This is
     /// only used in tests for generating input data.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "std"))]
     pub(crate) fn new(rare1i: u8, rare2i: u8) -> RareNeedleBytes {
         RareNeedleBytes { rare1i, rare2i }
     }

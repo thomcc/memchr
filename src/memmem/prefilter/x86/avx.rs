@@ -27,10 +27,6 @@ pub(crate) unsafe fn find(
 
 #[cfg(test)]
 mod tests {
-    use crate::memmem::rabinkarp;
-
-    use super::*;
-
     #[test]
     #[cfg(not(miri))]
     fn prefilter_permutations() {
