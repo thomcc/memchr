@@ -261,14 +261,14 @@ impl<'h, 'n> FindIter<'h, 'n> {
 impl<'h, 'n> Iterator for FindIter<'h, 'n> {
     type Item = usize;
 
-    #[inline]
     fn next(&mut self) -> Option<usize> {
         if self.pos > self.haystack.len() {
             return None;
         }
         let result = self
             .finder
-            .find_with(&mut self.prestate, &self.haystack[self.pos..]);
+            .searcher
+            .find(&mut self.prestate, &self.haystack[self.pos..]);
         match result {
             None => None,
             Some(i) => {
@@ -309,7 +309,6 @@ impl<'h, 'n> FindRevIter<'h, 'n> {
 impl<'h, 'n> Iterator for FindRevIter<'h, 'n> {
     type Item = usize;
 
-    #[inline]
     fn next(&mut self) -> Option<usize> {
         let pos = match self.pos {
             None => return None,
@@ -380,7 +379,7 @@ impl<'n> Finder<'n> {
     /// assert_eq!(None, Finder::new("quux").find(haystack));
     /// ```
     pub fn find(&self, haystack: &[u8]) -> Option<usize> {
-        self.searcher.find(haystack)
+        self.searcher.find(&mut self.searcher.prefilter_state(), haystack)
     }
 
     /// Returns an iterator over all occurrences of a substring in a haystack.
@@ -455,15 +454,6 @@ impl<'n> Finder<'n> {
     pub fn needle(&self) -> &[u8] {
         self.searcher.needle()
     }
-
-    #[inline(always)]
-    fn find_with(
-        &self,
-        prestate: &mut PrefilterState,
-        haystack: &[u8],
-    ) -> Option<usize> {
-        self.searcher.find_with(prestate, haystack)
-    }
 }
 
 /// A single substring reverse searcher fixed to a particular needle.
@@ -518,7 +508,6 @@ impl<'n> FinderRev<'n> {
     /// assert_eq!(Some(4), FinderRev::new("bar").rfind(haystack));
     /// assert_eq!(None, FinderRev::new("quux").rfind(haystack));
     /// ```
-    #[inline]
     pub fn rfind<B: AsRef<[u8]>>(&self, haystack: B) -> Option<usize> {
         self.searcher.rfind(haystack.as_ref())
     }
@@ -782,11 +771,8 @@ impl<'n> Searcher<'n> {
         }
     }
 
-    fn find(&self, haystack: &[u8]) -> Option<usize> {
-        self.find_with(&mut self.prefilter_state(), haystack)
-    }
-
-    fn find_with(
+    #[inline(always)]
+    fn find(
         &self,
         prestate: &mut PrefilterState,
         haystack: &[u8],
@@ -803,7 +789,7 @@ impl<'n> Searcher<'n> {
             TwoWay(ref tw) => {
                 // For very short haystacks (e.g., where the prefilter probably
                 // can't run), it's faster to just run RK.
-                if haystack.len() < prefilter::minimum_len(haystack, needle) {
+                if rabinkarp::is_fast(haystack, needle) {
                     return rabinkarp::find_with(
                         &self.ninfo.nhash,
                         haystack,
@@ -908,6 +894,7 @@ impl<'n> SearcherRev<'n> {
         }
     }
 
+    #[inline(always)]
     fn rfind(&self, haystack: &[u8]) -> Option<usize> {
         use self::SearcherRevKind::*;
 
@@ -921,7 +908,7 @@ impl<'n> SearcherRev<'n> {
             TwoWay(ref tw) => {
                 // For very short haystacks (e.g., where the prefilter probably
                 // can't run), it's faster to just run RK.
-                if haystack.len() < prefilter::minimum_len(haystack, needle) {
+                if rabinkarp::is_fast(haystack, needle) {
                     return rabinkarp::rfind_with(
                         &self.nhash,
                         haystack,

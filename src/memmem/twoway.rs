@@ -109,6 +109,7 @@ impl Forward {
     ///
     /// Callers must guarantee that the needle is non-empty and its length is
     /// <= the haystack's length.
+    #[inline(always)]
     pub(crate) fn find(
         &self,
         prestate: &mut PrefilterState,
@@ -322,6 +323,7 @@ impl Reverse {
     ///
     /// Callers must guarantee that the needle is non-empty and its length is
     /// <= the haystack's length.
+    #[inline(always)]
     pub(crate) fn rfind(
         &self,
         haystack: &[u8],
@@ -709,6 +711,7 @@ impl ApproximateByteSet {
 
     /// Return true if and only if the given byte might be in this set. This
     /// may return a false positive, but will never return a false negative.
+    #[inline(always)]
     fn contains(&self, byte: u8) -> bool {
         self.0 & (1 << (byte % 64)) != 0
     }

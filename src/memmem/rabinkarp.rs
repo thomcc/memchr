@@ -31,6 +31,11 @@ Finally, aho-corasick uses Rabin-Karp for multiple pattern match in some cases:
 https://github.com/BurntSushi/aho-corasick/blob/3852632f10587db0ff72ef29e88d58bf305a0946/src/packed/rabinkarp.rs
 */
 
+/// Whether RK is believed to be very fast for the given needle/haystack.
+pub(crate) fn is_fast(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.len() < 16
+}
+
 /// Search for the first occurrence of needle in haystack using Rabin-Karp.
 pub(crate) fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     find_with(&NeedleHash::forward(needle), haystack, needle)

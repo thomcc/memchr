@@ -261,17 +261,23 @@ pub(crate) fn forward(
 /// used. If the haystack is below this length, then it's probably not worth
 /// the overhead of running the prefilter.
 pub(crate) fn minimum_len(_haystack: &[u8], needle: &[u8]) -> usize {
-    /// If the haystack length isn't greater than needle.len() * FACTOR, then
-    /// no prefilter will be used. The presumption here is that since there
-    /// are so few bytes to check, it's not worth running the prefilter since
-    /// there will need to be a validation step anyway. Thus, the prefilter is
-    /// largely redundant work.
-    ///
-    /// Increase the factor noticeably hurts the
-    /// memmem/krate/prebuilt/teeny-*/never-john-watson benchmarks.
+    // If the haystack length isn't greater than needle.len() * FACTOR, then
+    // no prefilter will be used. The presumption here is that since there
+    // are so few bytes to check, it's not worth running the prefilter since
+    // there will need to be a validation step anyway. Thus, the prefilter is
+    // largely redundant work.
+    //
+    // Increase the factor noticeably hurts the
+    // memmem/krate/prebuilt/teeny-*/never-john-watson benchmarks.
     const PREFILTER_LENGTH_FACTOR: usize = 2;
     const VECTOR_MIN_LENGTH: usize = 16;
-    core::cmp::max(VECTOR_MIN_LENGTH, PREFILTER_LENGTH_FACTOR * needle.len())
+    let min = core::cmp::max(
+        VECTOR_MIN_LENGTH,
+        PREFILTER_LENGTH_FACTOR * needle.len(),
+    );
+    // For haystacks with length==min, we still want to avoid the prefilter,
+    // so add 1.
+    min + 1
 }
 
 #[cfg(all(test, feature = "std", not(miri)))]
