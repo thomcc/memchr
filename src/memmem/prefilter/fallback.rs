@@ -1,3 +1,33 @@
+/*
+This module implements a "fallback" prefilter that only relies on memchr to
+function. While memchr works best when it's explicitly vectorized, its
+fallback implementations are fast enough to make a prefilter like this
+worthwhile.
+
+The essence of this implementation is to identify two rare bytes in a needle
+based on a background frequency distribution of bytes. We then run memchr on the
+rarer byte. For each match, we use the second rare byte as a guard to quickly
+check if a match is possible. If the position passes the guard test, then we do
+a naive memcmp to confirm the match.
+
+In practice, this formulation works amazingly well, primarily because of the
+heuristic use of a background frequency distribution. However, it does have a
+number of weaknesses where it can get quite slow when its background frequency
+distribution doesn't line up with the haystack being searched. This is why we
+have specialized vector routines that essentially take this idea and move the
+guard check into vectorized code. (Those specialized vector routines do still
+make use of the background frequency distribution of bytes though.)
+
+This fallback implementation was originally formulated in regex many moons ago:
+https://github.com/rust-lang/regex/blob/3db8722d0b204a85380fe2a65e13d7065d7dd968/src/literal/imp.rs#L370-L501
+Prior to that, I'm not aware of anyone using this technique in any prominant
+substring search implementation. Although, I'm sure folks have had this same
+insight long before me.
+
+Another version of this also appeared in bstr:
+https://github.com/BurntSushi/bstr/blob/a444256ca7407fe180ee32534688549655b7a38e/src/search/prefilter.rs#L83-L340
+*/
+
 use crate::memmem::{
     prefilter::{PrefilterFnTy, PrefilterState},
     NeedleInfo,

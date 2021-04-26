@@ -9,6 +9,11 @@ use crate::memmem::{
 const _: PrefilterFnTy = find;
 
 /// An AVX2 accelerated candidate finder for single-substring search.
+///
+/// # Safety
+///
+/// Callers must ensure that the avx2 CPU feature is enabled in the current
+/// environment.
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn find(
     prestate: &mut PrefilterState,

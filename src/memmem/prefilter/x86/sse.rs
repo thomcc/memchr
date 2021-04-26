@@ -9,6 +9,11 @@ use crate::memmem::{
 const _: PrefilterFnTy = find;
 
 /// An SSE2 accelerated candidate finder for single-substring search.
+///
+/// # Safety
+///
+/// Callers must ensure that the sse2 CPU feature is enabled in the current
+/// environment. This feature should be enabled in all x86_64 targets.
 #[target_feature(enable = "sse2")]
 pub(crate) unsafe fn find(
     prestate: &mut PrefilterState,
