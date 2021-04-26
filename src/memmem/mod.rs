@@ -5,7 +5,15 @@ TODO
 #![allow(warnings)]
 
 pub use self::prefilter::Prefilter;
-use self::prefilter::PrefilterState;
+
+use crate::{
+    cow::CowBytes,
+    memmem::{
+        prefilter::{PrefilterFn2, PrefilterState},
+        rabinkarp::NeedleHash,
+        rarebytes::RareNeedleBytes,
+    },
+};
 
 /// Defines a suite of quickcheck properties for forward and reverse
 /// substring searching.
@@ -101,21 +109,21 @@ mod vector;
 /// Basic usage:
 ///
 /// ```
-/// use memchr::memmem::memmem_iter;
+/// use memchr::memmem;
 ///
 /// let haystack = b"foo bar foo baz foo";
-/// let mut it = memmem_iter(haystack, b"foo");
+/// let mut it = memmem::find_iter(haystack, b"foo");
 /// assert_eq!(Some(0), it.next());
 /// assert_eq!(Some(8), it.next());
 /// assert_eq!(Some(16), it.next());
 /// assert_eq!(None, it.next());
 /// ```
 #[inline]
-pub fn memmem_iter<'h, 'n>(
+pub fn find_iter<'h, 'n>(
     haystack: &'h [u8],
     needle: &'n [u8],
-) -> Memmem<'h, 'n> {
-    Memmem::new(haystack, Finder::new(needle))
+) -> FindIter<'h, 'n> {
+    FindIter::new(haystack, Finder::new(needle))
 }
 
 /// Returns a reverse iterator over all occurrences of a substring in a
@@ -135,21 +143,21 @@ pub fn memmem_iter<'h, 'n>(
 /// Basic usage:
 ///
 /// ```
-/// use memchr::memmem::memrmem_iter;
+/// use memchr::memmem;
 ///
 /// let haystack = b"foo bar foo baz foo";
-/// let mut it = memrmem_iter(haystack, b"foo");
+/// let mut it = memmem::rfind_iter(haystack, b"foo");
 /// assert_eq!(Some(16), it.next());
 /// assert_eq!(Some(8), it.next());
 /// assert_eq!(Some(0), it.next());
 /// assert_eq!(None, it.next());
 /// ```
 #[inline]
-pub fn memrmem_iter<'h, 'n>(
+pub fn rfind_iter<'h, 'n>(
     haystack: &'h [u8],
     needle: &'n [u8],
-) -> Memrmem<'h, 'n> {
-    Memrmem::new(haystack, FinderRev::new(needle))
+) -> FindRevIter<'h, 'n> {
+    FindRevIter::new(haystack, FinderRev::new(needle))
 }
 
 /// Returns the index of the first occurrence of the given needle.
@@ -172,15 +180,15 @@ pub fn memrmem_iter<'h, 'n>(
 /// Basic usage:
 ///
 /// ```
-/// use memchr::memmem::memmem;
+/// use memchr::memmem;
 ///
 /// let haystack = b"foo bar baz";
-/// assert_eq!(Some(0), memmem(haystack, b"foo"));
-/// assert_eq!(Some(4), memmem(haystack, b"bar"));
-/// assert_eq!(None, memmem(haystack, b"quux"));
+/// assert_eq!(Some(0), memmem::find(haystack, b"foo"));
+/// assert_eq!(Some(4), memmem::find(haystack, b"bar"));
+/// assert_eq!(None, memmem::find(haystack, b"quux"));
 /// ```
 #[inline]
-pub fn memmem(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+pub fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if haystack.len() < 64 {
         rabinkarp::find(haystack, needle)
     } else {
@@ -208,16 +216,16 @@ pub fn memmem(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// Basic usage:
 ///
 /// ```
-/// use memchr::memmem::memrmem;
+/// use memchr::memmem;
 ///
 /// let haystack = b"foo bar baz";
-/// assert_eq!(Some(0), memrmem(haystack, b"foo"));
-/// assert_eq!(Some(4), memrmem(haystack, b"bar"));
-/// assert_eq!(Some(8), memrmem(haystack, b"ba"));
-/// assert_eq!(None, memrmem(haystack, b"quux"));
+/// assert_eq!(Some(0), memmem::rfind(haystack, b"foo"));
+/// assert_eq!(Some(4), memmem::rfind(haystack, b"bar"));
+/// assert_eq!(Some(8), memmem::rfind(haystack, b"ba"));
+/// assert_eq!(None, memmem::rfind(haystack, b"quux"));
 /// ```
 #[inline]
-pub fn memrmem(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+pub fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if haystack.len() < 64 {
         rabinkarp::rfind(haystack, needle)
     } else {
@@ -232,25 +240,25 @@ pub fn memrmem(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// `'h` is the lifetime of the haystack while `'n` is the lifetime of the
 /// needle.
 #[derive(Debug)]
-pub struct Memmem<'h, 'n> {
+pub struct FindIter<'h, 'n> {
     haystack: &'h [u8],
     prestate: PrefilterState,
     finder: Finder<'n>,
     pos: usize,
 }
 
-impl<'h, 'n> Memmem<'h, 'n> {
+impl<'h, 'n> FindIter<'h, 'n> {
     #[inline(always)]
     pub(crate) fn new(
         haystack: &'h [u8],
         finder: Finder<'n>,
-    ) -> Memmem<'h, 'n> {
+    ) -> FindIter<'h, 'n> {
         let prestate = finder.searcher.prefilter_state();
-        Memmem { haystack, prestate, finder, pos: 0 }
+        FindIter { haystack, prestate, finder, pos: 0 }
     }
 }
 
-impl<'h, 'n> Iterator for Memmem<'h, 'n> {
+impl<'h, 'n> Iterator for FindIter<'h, 'n> {
     type Item = usize;
 
     #[inline]
@@ -279,7 +287,7 @@ impl<'h, 'n> Iterator for Memmem<'h, 'n> {
 /// `'h` is the lifetime of the haystack while `'n` is the lifetime of the
 /// needle.
 #[derive(Debug)]
-pub struct Memrmem<'h, 'n> {
+pub struct FindRevIter<'h, 'n> {
     haystack: &'h [u8],
     finder: FinderRev<'n>,
     /// When searching with an empty needle, this gets set to `None` after
@@ -287,18 +295,18 @@ pub struct Memrmem<'h, 'n> {
     pos: Option<usize>,
 }
 
-impl<'h, 'n> Memrmem<'h, 'n> {
+impl<'h, 'n> FindRevIter<'h, 'n> {
     #[inline(always)]
     pub(crate) fn new(
         haystack: &'h [u8],
         finder: FinderRev<'n>,
-    ) -> Memrmem<'h, 'n> {
+    ) -> FindRevIter<'h, 'n> {
         let pos = Some(haystack.len());
-        Memrmem { haystack, finder, pos }
+        FindRevIter { haystack, finder, pos }
     }
 }
 
-impl<'h, 'n> Iterator for Memrmem<'h, 'n> {
+impl<'h, 'n> Iterator for FindRevIter<'h, 'n> {
     type Item = usize;
 
     #[inline]
@@ -402,8 +410,11 @@ impl<'n> Finder<'n> {
     /// assert_eq!(None, it.next());
     /// ```
     #[inline]
-    pub fn find_iter<'a, 'h>(&'a self, haystack: &'h [u8]) -> Memmem<'h, 'a> {
-        Memmem::new(haystack, self.as_ref())
+    pub fn find_iter<'a, 'h>(
+        &'a self,
+        haystack: &'h [u8],
+    ) -> FindIter<'h, 'a> {
+        FindIter::new(haystack, self.as_ref())
     }
 
     /// Convert this finder into its owned variant, such that it no longer
@@ -543,8 +554,8 @@ impl<'n> FinderRev<'n> {
     pub fn rfind_iter<'a, 'h>(
         &'a self,
         haystack: &'h [u8],
-    ) -> Memrmem<'h, 'a> {
-        Memrmem::new(haystack, self.as_ref())
+    ) -> FindRevIter<'h, 'a> {
+        FindRevIter::new(haystack, self.as_ref())
     }
 
     /// Convert this finder into its owned variant, such that it no longer
@@ -624,6 +635,168 @@ impl FinderBuilder {
     }
 }
 
+/// The internal implementation of a forward substring searcher.
+///
+/// The reality is that this is a "meta" searcher. Namely, depending on a
+/// variety of parameters (CPU support, target, needle size, haystack size and
+/// even dynamic properties such as prefilter effectiveness), the actual
+/// algorithm employed to do substring search may change.
+#[derive(Clone, Debug)]
+struct Searcher<'n> {
+    /// The configuration for this searcher.
+    config: SearcherConfig,
+    /// The actual needle we're searching for.
+    ///
+    /// A CowBytes is like a Cow<[u8]>, except in no_std environments, it is
+    /// specialized to a single variant (the borrowed form).
+    needle: CowBytes<'n>,
+    /// The offsets of "rare" bytes detected in the needle.
+    ///
+    /// This is meant to be a heuristic in order to maximize the effectiveness
+    /// of vectorized code. Namely, vectorized code tends to focus on only
+    /// one or two bytes. If we pick bytes from the needle that occur
+    /// infrequently, then more time will be spent in the vectorized code and
+    /// will likely make the overall search (much) faster.
+    ///
+    /// Of course, this is only a heuristic based on a background frequency
+    /// distribution of bytes. But it tends to work very well in practice.
+    rarebytes: RareNeedleBytes,
+    /// A Rabin-Karp hash of the needle.
+    ///
+    /// This is store here instead of in a more specific Rabin-Karp search
+    /// since Rabin-Karp may be used even if another SearchKind corresponds
+    /// to some other search implementation. e.g., If measurements suggest RK
+    /// is faster in some cases or if a search implementation can't handle
+    /// particularly small haystack. (Moreover, we cannot use RK *generally*,
+    /// since its worst case time is multiplicative. Instead, we only use it
+    /// some small haystacks, where "small" is a constant.)
+    nhash: NeedleHash,
+    /// A prefilter function, if it was deemed appropriate.
+    ///
+    /// Some substring search implementations (like Two-Way) benefit greatly
+    /// if we can quickly find candidate starting positions for a match.
+    prefn: Option<PrefilterFn2>,
+    /// The actual substring implementation in use.
+    kind: SearcherKind<'n>,
+}
+
+/// Configuration for substring search.
+#[derive(Clone, Copy, Debug)]
+struct SearcherConfig {
+    /// This permits changing the behavior of the prefilter, since it can have
+    /// a variable impact on performance.
+    prefilter: Prefilter,
+}
+
+#[derive(Clone, Debug)]
+enum SearcherKind<'n> {
+    /// A special case for empty needles. An empty needle always matches, even
+    /// in an empty haystack.
+    Empty,
+    /// This is used whenever the needle is a single byte. In this case, we
+    /// always use memchr.
+    OneByte(u8),
+    /// Two-Way is the generic work horse and is what provides our additive
+    /// linear time guarantee. In general, it's used when the needle is bigger
+    /// than 8 bytes or so.
+    TwoWay(twoway::Forward<'n>),
+}
+
+impl<'n> Searcher<'n> {
+    fn new(config: SearcherConfig, needle: &'n [u8]) -> Searcher<'n> {
+        let rarebytes = RareNeedleBytes::forward(needle);
+        let prefn = prefilter::forward(&config.prefilter, &rarebytes, needle);
+        let kind = todo!();
+        Searcher {
+            config,
+            needle: CowBytes::new(needle),
+            rarebytes,
+            nhash: NeedleHash::forward(needle),
+            prefn,
+            kind,
+        }
+    }
+
+    fn prefilter_state(&self) -> PrefilterState {
+        if self.prefn.is_none() {
+            PrefilterState::inert()
+        } else {
+            PrefilterState::new()
+        }
+    }
+
+    fn needle(&self) -> &[u8] {
+        self.needle.as_slice()
+    }
+
+    fn as_ref(&self) -> Searcher<'_> {
+        use self::SearcherKind::*;
+
+        let kind = match self.kind {
+            Empty => Empty,
+            OneByte(b) => OneByte(b),
+            TwoWay(ref tw) => TwoWay(tw.as_ref()),
+        };
+        Searcher {
+            config: self.config,
+            needle: CowBytes::new(self.needle()),
+            rarebytes: self.rarebytes,
+            nhash: self.nhash,
+            prefn: self.prefn,
+            kind,
+        }
+    }
+
+    fn into_owned(self) -> Searcher<'static> {
+        use self::SearcherKind::*;
+
+        let kind = match self.kind {
+            Empty => Empty,
+            OneByte(b) => OneByte(b),
+            TwoWay(tw) => TwoWay(tw.into_owned()),
+        };
+        Searcher {
+            config: self.config,
+            needle: self.needle.into_owned(),
+            rarebytes: self.rarebytes,
+            nhash: self.nhash,
+            prefn: self.prefn,
+            kind,
+        }
+    }
+
+    fn find(&self, haystack: &[u8]) -> Option<usize> {
+        self.find_with(&mut self.prefilter_state(), haystack)
+    }
+
+    fn find_with(
+        &self,
+        prestate: &mut PrefilterState,
+        haystack: &[u8],
+    ) -> Option<usize> {
+        let needle = self.needle();
+        if haystack.len() < needle.len() {
+            return None;
+        }
+        match self.kind {
+            SearcherKind::Empty => Some(0),
+            SearcherKind::OneByte(b) => crate::memchr(b, haystack),
+            SearcherKind::TwoWay(ref tw) => {
+                // For very short haystacks (e.g., where the prefilter probably
+                // can't run), it's faster to just run RK.
+                if haystack.len() < prefilter::minimum_len(haystack, needle) {
+                    return rabinkarp::find_with(
+                        &self.nhash,
+                        haystack,
+                        needle,
+                    );
+                }
+                tw.find_with(prestate, haystack)
+            }
+        }
+    }
+}
+
 /// This module defines some generic quickcheck properties useful for testing
 /// any substring search algorithm. It also runs those properties for the
 /// top-level public API memmem routines. (The properties are also used to
@@ -634,7 +807,7 @@ mod testprops {
     // N.B. This defines the quickcheck tests using the properties defined
     // below. Because of macro-visibility weirdness, the actual macro is
     // defined at the top of this file.
-    define_memmem_quickcheck_tests!(super::memmem, super::memrmem);
+    define_memmem_quickcheck_tests!(super::find, super::rfind);
 
     /// Check that every prefix of the given byte string is a substring.
     pub(crate) fn prefix_is_substring(
@@ -727,7 +900,7 @@ mod testprops {
 /// implementation.
 #[cfg(test)]
 mod testsimples {
-    define_memmem_simple_tests!(super::memmem, super::memrmem);
+    define_memmem_simple_tests!(super::find, super::rfind);
 
     /// Each test is a (needle, haystack, expected_fwd, expected_rev) tuple.
     type SearchTest =

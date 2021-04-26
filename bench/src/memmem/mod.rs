@@ -90,12 +90,7 @@ follows:
     is expected to be particularly low.
 */
 
-#![allow(warnings)]
-
-use std::str;
-
 use criterion::Criterion;
-use memchr::memmem::{self, memmem_iter, memrmem_iter};
 
 use crate::{define, memmem::inputs::INPUTS};
 
@@ -275,7 +270,7 @@ fn oneshot_iter(c: &mut Criterion) {
                             $inp.corpus.as_bytes(),
                             Box::new(move |b| {
                                 b.iter(|| {
-                                    let mut it =
+                                    let it =
                                         $find_iter($inp.corpus, $q.needle);
                                     assert_eq!($q.count, it.count());
                                 });
@@ -343,7 +338,7 @@ fn prebuilt_iter(c: &mut Criterion) {
                             Box::new(move |b| {
                                 let finder = $new_finder($q.needle);
                                 b.iter(|| {
-                                    let mut it = finder.iter($inp.corpus);
+                                    let it = finder.iter($inp.corpus);
                                     assert_eq!($q.count, it.count());
                                 });
                             }),

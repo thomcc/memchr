@@ -27,7 +27,7 @@ pub(crate) mod krate {
         use memchr::memmem;
 
         pub(crate) fn oneshot(haystack: &str, needle: &str) -> bool {
-            memmem::memmem(haystack.as_bytes(), needle.as_bytes()).is_some()
+            memmem::find(haystack.as_bytes(), needle.as_bytes()).is_some()
         }
 
         pub(crate) fn prebuilt(
@@ -41,7 +41,7 @@ pub(crate) mod krate {
             haystack: &'a str,
             needle: &'a str,
         ) -> impl Iterator<Item = usize> + 'a {
-            memmem::memmem_iter(haystack.as_bytes(), needle.as_bytes())
+            memmem::find_iter(haystack.as_bytes(), needle.as_bytes())
         }
 
         pub(crate) fn prebuiltiter(needle: &str) -> PrebuiltIter {
@@ -65,7 +65,7 @@ pub(crate) mod krate {
         use memchr::memmem;
 
         pub(crate) fn oneshot(haystack: &str, needle: &str) -> bool {
-            memmem::memrmem(haystack.as_bytes(), needle.as_bytes()).is_some()
+            memmem::rfind(haystack.as_bytes(), needle.as_bytes()).is_some()
         }
 
         pub(crate) fn prebuilt(
@@ -79,7 +79,7 @@ pub(crate) mod krate {
             haystack: &'a str,
             needle: &'a str,
         ) -> impl Iterator<Item = usize> + 'a {
-            memmem::memrmem_iter(haystack.as_bytes(), needle.as_bytes())
+            memmem::rfind_iter(haystack.as_bytes(), needle.as_bytes())
         }
 
         pub(crate) fn prebuiltiter(needle: &str) -> PrebuiltIter {
@@ -157,6 +157,8 @@ pub(crate) mod krate_nopre {
         }
     }
 
+    // N.B. memrmem/krate_nopre and memrmem/krate should be equivalent for now
+    // since reverse searching doesn't have any prefilter support.
     pub(crate) mod rev {
         use memchr::memmem;
 
@@ -251,7 +253,7 @@ pub(crate) mod bstr {
                 super::super::iter_from_find(
                     haystack.as_bytes(),
                     self.0.needle(),
-                    move |h, n| self.0.find(h),
+                    move |h, _| self.0.find(h),
                 )
             }
         }
@@ -292,7 +294,7 @@ pub(crate) mod bstr {
                 super::super::iter_from_rfind(
                     haystack.as_bytes(),
                     self.0.needle(),
-                    move |h, n| self.0.rfind(h),
+                    move |h, _| self.0.rfind(h),
                 )
             }
         }
@@ -358,7 +360,7 @@ pub(crate) mod regex {
         }
 
         pub(crate) fn prebuilt(
-            needle: &str,
+            _needle: &str,
         ) -> impl Fn(&str) -> bool + 'static {
             |_| unimplemented!("regex does not support reverse searches")
         }
@@ -372,7 +374,7 @@ pub(crate) mod regex {
             })
         }
 
-        pub(crate) fn prebuiltiter(needle: &str) -> super::super::NoIter {
+        pub(crate) fn prebuiltiter(_needle: &str) -> super::super::NoIter {
             unimplemented!("regex does not support reverse searches")
         }
     }
@@ -396,7 +398,7 @@ pub(crate) mod stud {
         }
 
         pub(crate) fn prebuilt(
-            needle: &str,
+            _needle: &str,
         ) -> impl Fn(&str) -> bool + 'static {
             |_| unimplemented!("std does not support prebuilt searches")
         }
@@ -408,7 +410,7 @@ pub(crate) mod stud {
             haystack.match_indices(needle).map(|(i, _)| i)
         }
 
-        pub(crate) fn prebuiltiter(needle: &str) -> super::super::NoIter {
+        pub(crate) fn prebuiltiter(_needle: &str) -> super::super::NoIter {
             super::super::NoIter { imp: "std" }
         }
     }
@@ -419,7 +421,7 @@ pub(crate) mod stud {
         }
 
         pub(crate) fn prebuilt(
-            needle: &str,
+            _needle: &str,
         ) -> impl Fn(&str) -> bool + 'static {
             |_| unimplemented!("std does not support prebuilt searches")
         }
@@ -431,7 +433,7 @@ pub(crate) mod stud {
             haystack.rmatch_indices(needle).map(|(i, _)| i)
         }
 
-        pub(crate) fn prebuiltiter(needle: &str) -> super::super::NoIter {
+        pub(crate) fn prebuiltiter(_needle: &str) -> super::super::NoIter {
             super::super::NoIter { imp: "std" }
         }
     }
@@ -458,7 +460,7 @@ pub(crate) mod twoway {
         }
 
         pub(crate) fn prebuilt(
-            needle: &str,
+            _needle: &str,
         ) -> impl Fn(&str) -> bool + 'static {
             |_| unimplemented!("twoway does not support prebuilt searches")
         }
@@ -474,7 +476,7 @@ pub(crate) mod twoway {
             )
         }
 
-        pub(crate) fn prebuiltiter(needle: &str) -> super::super::NoIter {
+        pub(crate) fn prebuiltiter(_needle: &str) -> super::super::NoIter {
             super::super::NoIter { imp: "twoway" }
         }
     }
@@ -486,7 +488,7 @@ pub(crate) mod twoway {
         }
 
         pub(crate) fn prebuilt(
-            needle: &str,
+            _needle: &str,
         ) -> impl Fn(&str) -> bool + 'static {
             |_| unimplemented!("twoway does not support prebuilt searches")
         }
@@ -502,7 +504,7 @@ pub(crate) mod twoway {
             )
         }
 
-        pub(crate) fn prebuiltiter(needle: &str) -> super::super::NoIter {
+        pub(crate) fn prebuiltiter(_needle: &str) -> super::super::NoIter {
             super::super::NoIter { imp: "twoway" }
         }
     }
@@ -578,40 +580,40 @@ pub(crate) mod sliceslice {
         }
 
         pub(crate) fn oneshotiter(
-            haystack: &str,
-            needle: &str,
+            _haystack: &str,
+            _needle: &str,
         ) -> impl Iterator<Item = usize> + 'static {
             std::iter::from_fn(move || {
                 unimplemented!("sliceslice doesn't not support iteration")
             })
         }
 
-        pub(crate) fn prebuiltiter(needle: &str) -> super::super::NoIter {
+        pub(crate) fn prebuiltiter(_needle: &str) -> super::super::NoIter {
             unimplemented!("sliceslice doesn't support prebuilt iteration")
         }
     }
 
     pub(crate) mod rev {
-        pub(crate) fn oneshot(haystack: &str, needle: &str) -> bool {
+        pub(crate) fn oneshot(_haystack: &str, _needle: &str) -> bool {
             unimplemented!("sliceslice does not support reverse searches")
         }
 
         pub(crate) fn prebuilt(
-            needle: &str,
+            _needle: &str,
         ) -> impl Fn(&str) -> bool + 'static {
             |_| unimplemented!("sliceslice does not support reverse searches")
         }
 
         pub(crate) fn oneshotiter(
-            haystack: &str,
-            needle: &str,
+            _haystack: &str,
+            _needle: &str,
         ) -> impl Iterator<Item = usize> + 'static {
             std::iter::from_fn(move || {
                 unimplemented!("sliceslice does not support reverse searches")
             })
         }
 
-        pub(crate) fn prebuiltiter(needle: &str) -> super::super::NoIter {
+        pub(crate) fn prebuiltiter(_needle: &str) -> super::super::NoIter {
             unimplemented!("sliceslice does not support reverse searches")
         }
     }

@@ -2,6 +2,7 @@ use core::mem;
 
 use crate::memmem::{
     byte_frequencies::BYTE_FREQUENCIES, rabinkarp::NeedleHash,
+    rarebytes::RareNeedleBytes,
 };
 
 mod fallback;
@@ -47,6 +48,22 @@ pub(crate) type PrefilterFn = unsafe fn(
     needle: &[u8],
 ) -> Option<usize>;
 
+#[derive(Clone, Copy)]
+pub(crate) struct PrefilterFn2(
+    pub(crate)  unsafe fn(
+        prestate: &mut PrefilterState,
+        freqy: &NeedleInfo,
+        haystack: &[u8],
+        needle: &[u8],
+    ) -> Option<usize>,
+);
+
+impl core::fmt::Debug for PrefilterFn2 {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        "<prefilter-fn(...)>".fmt(f)
+    }
+}
+
 /// Prefilter controls whether heuristics are used to accelerated searching.
 ///
 /// A prefilter refers to the idea of detecting candidate matches very quickly,
@@ -90,7 +107,7 @@ impl Default for Prefilter {
 }
 
 impl Prefilter {
-    fn is_none(&self) -> bool {
+    pub(crate) fn is_none(&self) -> bool {
         match *self {
             Prefilter::None => true,
             _ => false,
@@ -134,12 +151,12 @@ impl PrefilterState {
     const MIN_SKIP_BYTES: u32 = 8;
 
     /// Create a fresh prefilter state.
-    fn new() -> PrefilterState {
+    pub(crate) fn new() -> PrefilterState {
         PrefilterState { skips: 1, skipped: 0 }
     }
 
     /// Create a fresh prefilter state that is always inert.
-    fn inert() -> PrefilterState {
+    pub(crate) fn inert() -> PrefilterState {
         PrefilterState { skips: 0, skipped: 0 }
     }
 
@@ -186,6 +203,69 @@ impl PrefilterState {
     fn skips(&self) -> u32 {
         self.skips.saturating_sub(1)
     }
+}
+
+#[cfg(not(all(not(miri), target_arch = "x86_64", memchr_runtime_simd)))]
+#[inline(always)]
+pub(crate) fn forward(
+    config: &Prefilter,
+    rare: &RareNeedleBytes,
+    needle: &[u8],
+) -> Option<PrefilterFn2> {
+    if config.is_none() || needle.len() <= 1 {
+        return None;
+    }
+    let (rare1, _) = rare.as_rare_bytes(needle);
+    if rank(needle[rare1 as usize]) <= MAX_FALLBACK_RANK {
+        return Some(PrefilterFn2(fallback::find));
+    }
+    None;
+}
+
+#[cfg(all(not(miri), target_arch = "x86_64", memchr_runtime_simd))]
+#[inline(always)]
+pub(crate) fn forward(
+    config: &Prefilter,
+    rare: &RareNeedleBytes,
+    needle: &[u8],
+) -> Option<PrefilterFn2> {
+    if config.is_none() || needle.len() <= 1 {
+        return None;
+    }
+
+    #[cfg(feature = "std")]
+    {
+        if cfg!(memchr_runtime_avx) {
+            if is_x86_feature_detected!("avx2") {
+                return Some(PrefilterFn2(x86::avx::find));
+            }
+        }
+    }
+    if cfg!(memchr_runtime_sse2) {
+        return Some(PrefilterFn2(x86::sse::find));
+    }
+    let (rare1, _) = rare.as_rare_bytes(needle);
+    if rank(needle[rare1 as usize]) <= MAX_FALLBACK_RANK {
+        return Some(PrefilterFn2(fallback::find));
+    }
+    None
+}
+
+/// Return the minimum length of the haystack in which a prefilter should be
+/// used. If the haystack is below this length, then it's probably not worth
+/// the overhead of running the prefilter.
+pub(crate) fn minimum_len(_haystack: &[u8], needle: &[u8]) -> usize {
+    /// If the haystack length isn't greater than needle.len() * FACTOR, then
+    /// no prefilter will be used. The presumption here is that since there
+    /// are so few bytes to check, it's not worth running the prefilter since
+    /// there will need to be a validation step anyway. Thus, the prefilter is
+    /// largely redundant work.
+    ///
+    /// Increase the factor noticeably hurts the
+    /// memmem/krate/prebuilt/teeny-*/never-john-watson benchmarks.
+    const PREFILTER_LENGTH_FACTOR: usize = 2;
+    const VECTOR_MIN_LENGTH: usize = 16;
+    core::cmp::max(VECTOR_MIN_LENGTH, PREFILTER_LENGTH_FACTOR * needle.len())
 }
 
 /// TODO
