@@ -345,7 +345,7 @@ impl<'h, 'n> Iterator for FindRevIter<'h, 'n> {
 /// the lifetime of its needle.
 #[derive(Clone, Debug)]
 pub struct Finder<'n> {
-    searcher: twoway::Forward<'n>,
+    searcher: Searcher<'n>,
 }
 
 impl<'n> Finder<'n> {
@@ -601,7 +601,7 @@ impl<'n> FinderRev<'n> {
 /// A builder for constructing non-default forward or reverse memmem finders.
 #[derive(Clone, Debug, Default)]
 pub struct FinderBuilder {
-    config: twoway::Config,
+    config: SearcherConfig,
 }
 
 impl FinderBuilder {
@@ -616,7 +616,7 @@ impl FinderBuilder {
         &self,
         needle: &'n B,
     ) -> Finder<'n> {
-        Finder { searcher: twoway::Forward::new(self.config, needle.as_ref()) }
+        Finder { searcher: Searcher::new(self.config, needle.as_ref()) }
     }
 
     /// Build a reverse finder using the given needle from the current
@@ -681,7 +681,7 @@ struct Searcher<'n> {
 }
 
 /// Configuration for substring search.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 struct SearcherConfig {
     /// This permits changing the behavior of the prefilter, since it can have
     /// a variable impact on performance.
@@ -774,14 +774,16 @@ impl<'n> Searcher<'n> {
         prestate: &mut PrefilterState,
         haystack: &[u8],
     ) -> Option<usize> {
+        use self::SearcherKind::*;
+
         let needle = self.needle();
         if haystack.len() < needle.len() {
             return None;
         }
         match self.kind {
-            SearcherKind::Empty => Some(0),
-            SearcherKind::OneByte(b) => crate::memchr(b, haystack),
-            SearcherKind::TwoWay(ref tw) => {
+            Empty => Some(0),
+            OneByte(b) => crate::memchr(b, haystack),
+            TwoWay(ref tw) => {
                 // For very short haystacks (e.g., where the prefilter probably
                 // can't run), it's faster to just run RK.
                 if haystack.len() < prefilter::minimum_len(haystack, needle) {
@@ -792,6 +794,107 @@ impl<'n> Searcher<'n> {
                     );
                 }
                 tw.find_with(prestate, haystack)
+            }
+        }
+    }
+}
+
+/// The internal implementation of a reverse substring searcher.
+///
+/// See the forward searcher docs for more details. Currently, the reverse
+/// searcher is considerably simpler since it lacks prefilter support. This
+/// was done because it adds a lot of code, and more surface area to test. And
+/// in particular, it's not clear whether a prefilter on reverse searching is
+/// worth it. (If you have a compelling use case, please file an issue!)
+#[derive(Clone, Debug)]
+struct SearcherRev<'n> {
+    /// The actual needle we're searching for.
+    needle: CowBytes<'n>,
+    /// A Rabin-Karp hash of the needle.
+    nhash: NeedleHash,
+    /// The actual substring implementation in use.
+    kind: SearcherRevKind<'n>,
+}
+
+#[derive(Clone, Debug)]
+enum SearcherRevKind<'n> {
+    /// A special case for empty needles. An empty needle always matches, even
+    /// in an empty haystack.
+    Empty,
+    /// This is used whenever the needle is a single byte. In this case, we
+    /// always use memchr.
+    OneByte(u8),
+    /// Two-Way is the generic work horse and is what provides our additive
+    /// linear time guarantee. In general, it's used when the needle is bigger
+    /// than 8 bytes or so.
+    TwoWay(twoway::Reverse<'n>),
+}
+
+impl<'n> SearcherRev<'n> {
+    fn new(needle: &'n [u8]) -> SearcherRev<'n> {
+        let kind = todo!();
+        SearcherRev {
+            needle: CowBytes::new(needle),
+            nhash: NeedleHash::forward(needle),
+            kind,
+        }
+    }
+
+    fn needle(&self) -> &[u8] {
+        self.needle.as_slice()
+    }
+
+    fn as_ref(&self) -> SearcherRev<'_> {
+        use self::SearcherRevKind::*;
+
+        let kind = match self.kind {
+            Empty => Empty,
+            OneByte(b) => OneByte(b),
+            TwoWay(ref tw) => TwoWay(tw.as_ref()),
+        };
+        SearcherRev {
+            needle: CowBytes::new(self.needle()),
+            nhash: self.nhash,
+            kind,
+        }
+    }
+
+    fn into_owned(self) -> SearcherRev<'static> {
+        use self::SearcherRevKind::*;
+
+        let kind = match self.kind {
+            Empty => Empty,
+            OneByte(b) => OneByte(b),
+            TwoWay(tw) => TwoWay(tw.into_owned()),
+        };
+        SearcherRev {
+            needle: self.needle.into_owned(),
+            nhash: self.nhash,
+            kind,
+        }
+    }
+
+    fn find(&self, haystack: &[u8]) -> Option<usize> {
+        use self::SearcherRevKind::*;
+
+        let needle = self.needle();
+        if haystack.len() < needle.len() {
+            return None;
+        }
+        match self.kind {
+            Empty => Some(haystack.len()),
+            OneByte(b) => crate::memrchr(b, haystack),
+            TwoWay(ref tw) => {
+                // For very short haystacks (e.g., where the prefilter probably
+                // can't run), it's faster to just run RK.
+                if haystack.len() < prefilter::minimum_len(haystack, needle) {
+                    return rabinkarp::rfind_with(
+                        &self.nhash,
+                        haystack,
+                        needle,
+                    );
+                }
+                tw.rfind(haystack)
             }
         }
     }
