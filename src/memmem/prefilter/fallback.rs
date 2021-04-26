@@ -1,7 +1,10 @@
-use crate::memmem::prefilter::{NeedleInfo, PrefilterFn, PrefilterState};
+use crate::memmem::{
+    prefilter::{PrefilterFnTy, PrefilterState},
+    NeedleInfo,
+};
 
 // Check that the functions below satisfy the Prefilter function type.
-const _: PrefilterFn = find;
+const _: PrefilterFnTy = find;
 
 /// Look for a possible occurrence of needle. The position returned
 /// corresponds to the beginning of the occurrence, if one exists.
@@ -20,8 +23,8 @@ pub(crate) fn find(
     needle: &[u8],
 ) -> Option<usize> {
     let mut i = 0;
-    let (rare1i, rare2i) = ninfo.as_rare_usize();
-    let (rare1, rare2) = ninfo.rare_bytes(needle);
+    let (rare1i, rare2i) = ninfo.rarebytes.as_rare_usize();
+    let (rare1, rare2) = ninfo.rarebytes.as_rare_bytes(needle);
     while prestate.is_effective() {
         // Use a fast vectorized implementation to skip to the next
         // occurrence of the rarest byte (heuristically chosen) in the
@@ -60,7 +63,7 @@ mod tests {
     use super::*;
 
     fn freqy_find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-        let ninfo = NeedleInfo::forward(needle, false);
+        let ninfo = NeedleInfo::new(needle);
         let mut prestate = PrefilterState::new();
         find(&mut prestate, &ninfo, haystack, needle)
     }

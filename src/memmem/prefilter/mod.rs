@@ -1,9 +1,6 @@
 use core::mem;
 
-use crate::memmem::{
-    byte_frequencies::BYTE_FREQUENCIES, rabinkarp::NeedleHash,
-    rarebytes::RareNeedleBytes,
-};
+use crate::memmem::{rarebytes::RareNeedleBytes, NeedleInfo};
 
 mod fallback;
 mod genericsimd;
@@ -41,24 +38,33 @@ const MAX_FALLBACK_RANK: usize = 250;
 /// which generally won't be inlineable into the surrounding code anyway.
 /// (Unless AVX2 is enabled at compile time, but this is typically rare, since
 /// it produces a non-portable binary.)
-pub(crate) type PrefilterFn = unsafe fn(
+#[derive(Clone, Copy)]
+pub(crate) struct PrefilterFn(PrefilterFnTy);
+
+pub(crate) type PrefilterFnTy = unsafe fn(
     prestate: &mut PrefilterState,
-    freqy: &NeedleInfo,
+    ninfo: &NeedleInfo,
     haystack: &[u8],
     needle: &[u8],
 ) -> Option<usize>;
 
-#[derive(Clone, Copy)]
-pub(crate) struct PrefilterFn2(
-    pub(crate)  unsafe fn(
+impl PrefilterFn {
+    pub(crate) unsafe fn new(prefn: PrefilterFnTy) -> PrefilterFn {
+        PrefilterFn(prefn)
+    }
+
+    pub fn call(
+        self,
         prestate: &mut PrefilterState,
-        freqy: &NeedleInfo,
+        ninfo: &NeedleInfo,
         haystack: &[u8],
         needle: &[u8],
-    ) -> Option<usize>,
-);
+    ) -> Option<usize> {
+        unsafe { (self.0)(prestate, ninfo, haystack, needle) }
+    }
+}
 
-impl core::fmt::Debug for PrefilterFn2 {
+impl core::fmt::Debug for PrefilterFn {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         "<prefilter-fn(...)>".fmt(f)
     }
@@ -211,13 +217,13 @@ pub(crate) fn forward(
     config: &Prefilter,
     rare: &RareNeedleBytes,
     needle: &[u8],
-) -> Option<PrefilterFn2> {
+) -> Option<PrefilterFn> {
     if config.is_none() || needle.len() <= 1 {
         return None;
     }
     let (rare1, _) = rare.as_rare_bytes(needle);
     if rank(needle[rare1 as usize]) <= MAX_FALLBACK_RANK {
-        return Some(PrefilterFn2(fallback::find));
+        return Some(PrefilterFn(fallback::find));
     }
     None;
 }
@@ -228,7 +234,7 @@ pub(crate) fn forward(
     config: &Prefilter,
     rare: &RareNeedleBytes,
     needle: &[u8],
-) -> Option<PrefilterFn2> {
+) -> Option<PrefilterFn> {
     if config.is_none() || needle.len() <= 1 {
         return None;
     }
@@ -237,16 +243,16 @@ pub(crate) fn forward(
     {
         if cfg!(memchr_runtime_avx) {
             if is_x86_feature_detected!("avx2") {
-                return Some(PrefilterFn2(x86::avx::find));
+                return unsafe { Some(PrefilterFn::new(x86::avx::find)) };
             }
         }
     }
     if cfg!(memchr_runtime_sse2) {
-        return Some(PrefilterFn2(x86::sse::find));
+        return Some(PrefilterFn(x86::sse::find));
     }
-    let (rare1, _) = rare.as_rare_bytes(needle);
-    if rank(needle[rare1 as usize]) <= MAX_FALLBACK_RANK {
-        return Some(PrefilterFn2(fallback::find));
+    let (rare1_rank, _) = rare.as_ranks(needle);
+    if rare1_rank <= MAX_FALLBACK_RANK {
+        return Some(PrefilterFn(fallback::find));
     }
     None
 }
@@ -268,235 +274,14 @@ pub(crate) fn minimum_len(_haystack: &[u8], needle: &[u8]) -> usize {
     core::cmp::max(VECTOR_MIN_LENGTH, PREFILTER_LENGTH_FACTOR * needle.len())
 }
 
-/// TODO
-#[derive(Clone)]
-pub(crate) struct Freqy {
-    pub(crate) ninfo: NeedleInfo,
-    prefn: PrefilterFn,
-    inert: bool,
-}
-
-impl Freqy {
-    #[cfg(not(all(not(miri), target_arch = "x86_64", memchr_runtime_simd)))]
-    #[inline(always)]
-    pub(crate) fn forward(config: &Prefilter, needle: &[u8]) -> Freqy {
-        let mut ninfo = NeedleInfo::default();
-        let mut inert = false;
-        let mut prefn: PrefilterFn = fallback::find;
-
-        if config.is_none() || needle.len() <= 1 {
-            ninfo.nhash = NeedleHash::forward(needle);
-            inert = true;
-        } else {
-            ninfo = NeedleInfo::forward(needle, false);
-            let rare1 = needle[ninfo.rare1i as usize];
-            inert = rank(rare1) > MAX_FALLBACK_RANK;
-        }
-        Freqy { ninfo, prefn, inert }
-    }
-
-    #[cfg(all(not(miri), target_arch = "x86_64", memchr_runtime_simd))]
-    #[inline(always)]
-    pub(crate) fn forward(config: &Prefilter, needle: &[u8]) -> Freqy {
-        let mut ninfo = NeedleInfo::default();
-        let mut inert = false;
-        let mut prefn: PrefilterFn = fallback::find;
-
-        if config.is_none() || needle.len() <= 1 {
-            ninfo.nhash = NeedleHash::forward(needle);
-            inert = true;
-        } else {
-            let is_sse = cfg!(memchr_runtime_sse2);
-            let mut is_avx = false;
-            #[cfg(feature = "std")]
-            {
-                if cfg!(memchr_runtime_avx) {
-                    is_avx = is_x86_feature_detected!("avx2");
-                    if is_avx {
-                        prefn = x86::avx::find;
-                    }
-                }
-            }
-            ninfo = NeedleInfo::forward(needle, false);
-            // TODO: This should use x86::sse::find since memchr_runtime_simd
-            // implies that SSE2 is enabled. (But we should still check
-            // cfg!(memchr_runtime_sse2).)
-            if is_avx {
-                // set above, since x86::avx is only defined when std
-                // is enabled
-            } else if is_sse {
-                prefn = x86::sse::find;
-            } else {
-                let rare1 = needle[ninfo.rare1i as usize];
-                inert = rank(rare1) > MAX_FALLBACK_RANK;
-            }
-        }
-        Freqy { ninfo, prefn, inert }
-    }
-
-    /// Create a prefilter that is never used.
-    pub(crate) fn inert() -> Freqy {
-        Freqy {
-            ninfo: NeedleInfo::default(),
-            prefn: fallback::find,
-            inert: true,
-        }
-    }
-
-    /// Return a fresh prefilter state that can be used with this prefilter. A
-    /// prefilter state is used to track the effectiveness of a prefilter for
-    /// speeding up searches. Therefore, the prefilter state should generally
-    /// be reused on subsequent searches (such as in an iterator). For searches
-    /// on a different haystack, then a new prefilter state should be used.
-    pub(crate) fn state(&self) -> PrefilterState {
-        if self.inert {
-            PrefilterState::inert()
-        } else {
-            PrefilterState::new()
-        }
-    }
-
-    /// TODO
-    pub(crate) fn find(
-        &self,
-        state: &mut PrefilterState,
-        haystack: &[u8],
-        needle: &[u8],
-    ) -> Option<usize> {
-        unsafe { (self.prefn)(state, &self.ninfo, haystack, needle) }
-    }
-}
-
-impl core::fmt::Debug for Freqy {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        f.debug_struct("Freqy")
-            .field("ninfo", &self.ninfo)
-            .field("prefn", &"<fn(...)>")
-            .field("inert", &self.inert)
-            .finish()
-    }
-}
-
-/// A heuristic frequency based prefilter for searching a single needle.
-///
-/// This prefilter attempts to pick out the byte in a needle that is predicted
-/// to occur least frequently, and search for that using fast vectorized
-/// routines. If a rare enough byte could not be found, then this prefilter's
-/// constructors will return an inert `NeedleInfo`. The purpose of an inert
-/// set of offsets is to always produce an inert PrefilterState. In this way,
-/// the prefilter will be disabled. (We do this instead of using an Option to
-/// reduce space.)
-///
-/// This can be combined with `PrefilterState` to dynamically render this
-/// prefilter inert if it proves to ineffective.
-///
-/// A set of offsets is only computed for needles of length 2 or greater.
-/// Smaller needles should be special cased by the substring search algorithm
-/// in use.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct NeedleInfo {
-    /// The leftmost offset of the rarest byte in the needle, according to
-    /// pre-computed frequency analysis.
-    pub(crate) rare1i: u8,
-    /// The leftmost offset of the second rarest byte in the needle, according
-    /// to pre-computed frequency analysis.
-    ///
-    /// The second rarest byte is used as a type of guard for quickly detecting
-    /// a mismatch after memchr locates an instance of the rarest byte.
-    /// This is a hedge against pathological cases where the pre-computed
-    /// frequency analysis may be off. (But of course, does not prevent *all*
-    /// pathological cases.)
-    ///
-    /// In general, rare1i != rare2i by construction, although there is no hard
-    /// requirement that they be different. However, since the case of a single
-    /// byte needle is handled specially by memchr itself, rare2i generally
-    /// always should be different from rare1i since it would otherwise be
-    /// ineffective as a guard.
-    pub(crate) rare2i: u8,
-    pub(crate) nhash: NeedleHash,
-}
-
-impl NeedleInfo {
-    fn forward(needle: &[u8], skip_first_byte: bool) -> NeedleInfo {
-        let nhash = NeedleHash::forward(needle);
-        if needle.len() <= 1 || needle.len() > u8::MAX as usize {
-            // For needles bigger than u8::MAX, our offsets aren't big enough.
-            // (We make our offsets small to reduce stack copying.) It also
-            // isn't clear if needles that big would benefit from prefilters.
-            // If you have a use case for it, please file an issue. In that
-            // case, we should probably just adjust the routine below to pick
-            // some rare bytes from the first 255 bytes of the needle.
-            //
-            // Also note that for needles of size 0 or 1, they are special
-            // cased in Two-Way.
-            return NeedleInfo { rare1i: 0, rare2i: 0, nhash };
-        }
-
-        // Find the rarest two bytes. We make them distinct by construction.
-        let start = if skip_first_byte && needle.len() >= 3 { 1 } else { 0 };
-        let (mut rare1, mut rare1i) = (needle[start], start as u8);
-        let (mut rare2, mut rare2i) = (needle[start + 1], start as u8 + 1);
-        if rank(rare2) < rank(rare1) {
-            mem::swap(&mut rare1, &mut rare2);
-            mem::swap(&mut rare1i, &mut rare2i);
-        }
-        for (i, &b) in needle.iter().enumerate().skip(start + 2) {
-            if rank(b) < rank(rare1) {
-                rare2 = rare1;
-                rare2i = rare1i;
-                rare1 = b;
-                rare1i = i as u8;
-            } else if b != rare1 && rank(b) < rank(rare2) {
-                rare2 = b;
-                rare2i = i as u8;
-            }
-        }
-        // While not strictly required, we really don't want these to be
-        // equivalent. If they were, it would reduce the effectiveness of the
-        // prefilter.
-        assert_ne!(rare1i, rare2i);
-        NeedleInfo { rare1i, rare2i, nhash }
-    }
-
-    /// Return the rare bytes in the given needle in the forward direction. The
-    /// needle given must be the same one given to the NeedleInfo constructor.
-    pub(crate) fn rare_bytes(&self, needle: &[u8]) -> (u8, u8) {
-        (needle[self.rare1i as usize], needle[self.rare2i as usize])
-    }
-
-    /// Return the rare offsets for this neelde info such that the first offset
-    /// is always <= to the second offset. This is useful when a prefilter
-    /// doesn't care whether rare1 is rarer than rare2, but just wants to
-    /// ensure that they are ordered with respect to one another.
-    pub(crate) fn as_rare_ordered_usize(&self) -> (usize, usize) {
-        if self.rare1i <= self.rare2i {
-            (self.rare1i as usize, self.rare2i as usize)
-        } else {
-            (self.rare2i as usize, self.rare1i as usize)
-        }
-    }
-
-    /// Return the rare offsets for this neelde info as usize values in
-    /// the order in which they were constructed. rare1, for example, is
-    /// constructed as the "rarer" byte, and thus, prefilters may want to treat
-    /// it differently from rare2.
-    pub(crate) fn as_rare_usize(&self) -> (usize, usize) {
-        (self.rare1i as usize, self.rare2i as usize)
-    }
-}
-
-/// Return the heuristical frequency rank of the given byte. A lower rank
-/// means the byte is believed to occur less frequently.
-fn rank(b: u8) -> usize {
-    BYTE_FREQUENCIES[b as usize] as usize
-}
-
 #[cfg(all(test, feature = "std", not(miri)))]
 pub(crate) mod tests {
     use std::convert::{TryFrom, TryInto};
 
     use super::*;
-    use crate::memmem::rabinkarp;
+    use crate::memmem::{
+        prefilter::PrefilterFnTy, rabinkarp, rarebytes::RareNeedleBytes,
+    };
 
     // Below is a small jig that generates prefilter tests. The main purpose
     // of this jig is to generate tests of varying needle/haystack lengths
@@ -518,14 +303,14 @@ pub(crate) mod tests {
 
     impl PrefilterTest {
         /// Run all generated forward prefilter tests on the given prefn.
-        pub(crate) unsafe fn run_all_tests(prefn: PrefilterFn) {
+        pub(crate) unsafe fn run_all_tests(prefn: PrefilterFnTy) {
             PrefilterTest::run_all_tests_filter(prefn, |_| true)
         }
 
         /// Run all generated forward prefilter tests that pass the given
         /// predicate on the given prefn.
         pub(crate) unsafe fn run_all_tests_filter(
-            prefn: PrefilterFn,
+            prefn: PrefilterFnTy,
             mut predicate: impl FnMut(&PrefilterTest) -> bool,
         ) {
             for seed in PREFILTER_TEST_SEEDS {
@@ -551,8 +336,8 @@ pub(crate) mod tests {
             needle_len: usize,
             output: Option<usize>,
         ) -> Option<PrefilterTest> {
-            let rare1i: u8 = rare1i.try_into().unwrap();
-            let rare2i: u8 = rare2i.try_into().unwrap();
+            let mut rare1i: u8 = rare1i.try_into().unwrap();
+            let mut rare2i: u8 = rare2i.try_into().unwrap();
             // The '#' byte is never used in a haystack (unless we're expecting
             // a match), while the '@' byte is never used in a needle.
             let mut haystack = vec![b'@'; haystack_len];
@@ -565,28 +350,27 @@ pub(crate) mod tests {
             if let Some(i) = output {
                 haystack[i..i + needle.len()].copy_from_slice(&needle);
             }
-            let mut ninfo = NeedleInfo {
-                rare1i,
-                rare2i,
-                nhash: rabinkarp::NeedleHash::forward(&needle),
-            };
             // If the operations above lead to rare offsets pointing to the
             // non-first occurrence of a byte, then adjust it. This might lead
             // to redundant tests, but it's simpler than trying to change the
             // generation process I think.
             if let Some(i) = crate::memchr(seed.rare1, &needle) {
-                ninfo.rare1i = u8::try_from(i).unwrap();
+                rare1i = u8::try_from(i).unwrap();
             }
             if let Some(i) = crate::memchr(seed.rare2, &needle) {
-                ninfo.rare2i = u8::try_from(i).unwrap();
+                rare2i = u8::try_from(i).unwrap();
             }
+            let ninfo = NeedleInfo {
+                rarebytes: RareNeedleBytes::new(rare1i, rare2i),
+                nhash: rabinkarp::NeedleHash::forward(&needle),
+            };
             Some(PrefilterTest { ninfo, haystack, needle, output })
         }
 
         /// Run this specific test on the given prefilter function. If the
         /// outputs do no match, then this routine panics with a failure
         /// message.
-        unsafe fn run(&self, prefn: PrefilterFn) {
+        unsafe fn run(&self, prefn: PrefilterFnTy) {
             let mut prestate = PrefilterState::new();
             assert_eq!(
                 self.output,

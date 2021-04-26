@@ -9,7 +9,7 @@ pub use self::prefilter::Prefilter;
 use crate::{
     cow::CowBytes,
     memmem::{
-        prefilter::{PrefilterFn2, PrefilterState},
+        prefilter::{PrefilterFn, PrefilterState},
         rabinkarp::NeedleHash,
         rarebytes::RareNeedleBytes,
     },
@@ -481,7 +481,7 @@ impl<'n> Finder<'n> {
 /// the lifetime of its needle.
 #[derive(Clone, Debug)]
 pub struct FinderRev<'n> {
-    searcher: twoway::Reverse<'n>,
+    searcher: SearcherRev<'n>,
 }
 
 impl<'n> FinderRev<'n> {
@@ -625,7 +625,7 @@ impl FinderBuilder {
         &self,
         needle: &'n B,
     ) -> FinderRev<'n> {
-        FinderRev { searcher: twoway::Reverse::new(needle.as_ref()) }
+        FinderRev { searcher: SearcherRev::new(needle.as_ref()) }
     }
 
     /// Configure the prefilter setting for the finder.
@@ -650,6 +650,21 @@ struct Searcher<'n> {
     /// A CowBytes is like a Cow<[u8]>, except in no_std environments, it is
     /// specialized to a single variant (the borrowed form).
     needle: CowBytes<'n>,
+    /// A collection of facts computed on the needle that are useful for more
+    /// than one substring search algorithm.
+    ninfo: NeedleInfo,
+    /// A prefilter function, if it was deemed appropriate.
+    ///
+    /// Some substring search implementations (like Two-Way) benefit greatly
+    /// if we can quickly find candidate starting positions for a match.
+    prefn: Option<PrefilterFn>,
+    /// The actual substring implementation in use.
+    kind: SearcherKind,
+}
+
+/// A collection of facts computed about a search needle.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NeedleInfo {
     /// The offsets of "rare" bytes detected in the needle.
     ///
     /// This is meant to be a heuristic in order to maximize the effectiveness
@@ -660,7 +675,7 @@ struct Searcher<'n> {
     ///
     /// Of course, this is only a heuristic based on a background frequency
     /// distribution of bytes. But it tends to work very well in practice.
-    rarebytes: RareNeedleBytes,
+    pub(crate) rarebytes: RareNeedleBytes,
     /// A Rabin-Karp hash of the needle.
     ///
     /// This is store here instead of in a more specific Rabin-Karp search
@@ -670,14 +685,7 @@ struct Searcher<'n> {
     /// particularly small haystack. (Moreover, we cannot use RK *generally*,
     /// since its worst case time is multiplicative. Instead, we only use it
     /// some small haystacks, where "small" is a constant.)
-    nhash: NeedleHash,
-    /// A prefilter function, if it was deemed appropriate.
-    ///
-    /// Some substring search implementations (like Two-Way) benefit greatly
-    /// if we can quickly find candidate starting positions for a match.
-    prefn: Option<PrefilterFn2>,
-    /// The actual substring implementation in use.
-    kind: SearcherKind<'n>,
+    pub(crate) nhash: NeedleHash,
 }
 
 /// Configuration for substring search.
@@ -689,7 +697,7 @@ struct SearcherConfig {
 }
 
 #[derive(Clone, Debug)]
-enum SearcherKind<'n> {
+enum SearcherKind {
     /// A special case for empty needles. An empty needle always matches, even
     /// in an empty haystack.
     Empty,
@@ -699,24 +707,35 @@ enum SearcherKind<'n> {
     /// Two-Way is the generic work horse and is what provides our additive
     /// linear time guarantee. In general, it's used when the needle is bigger
     /// than 8 bytes or so.
-    TwoWay(twoway::Forward<'n>),
+    TwoWay(twoway::Forward),
 }
 
 impl<'n> Searcher<'n> {
     fn new(config: SearcherConfig, needle: &'n [u8]) -> Searcher<'n> {
-        let rarebytes = RareNeedleBytes::forward(needle);
-        let prefn = prefilter::forward(&config.prefilter, &rarebytes, needle);
-        let kind = todo!();
-        Searcher {
-            config,
-            needle: CowBytes::new(needle),
-            rarebytes,
-            nhash: NeedleHash::forward(needle),
-            prefn,
-            kind,
-        }
+        use self::SearcherKind::*;
+
+        let ninfo = NeedleInfo::new(needle);
+        let prefn =
+            prefilter::forward(&config.prefilter, &ninfo.rarebytes, needle);
+        let kind = if needle.len() == 0 {
+            Empty
+        } else if needle.len() == 1 {
+            OneByte(needle[0])
+        } else {
+            TwoWay(twoway::Forward::new(needle))
+        };
+        Searcher { config, needle: CowBytes::new(needle), ninfo, prefn, kind }
     }
 
+    /// Return a fresh prefilter state that can be used with this searcher.
+    /// A prefilter state is used to track the effectiveness of a searcher's
+    /// prefilter for speeding up searches. Therefore, the prefilter state
+    /// should generally be reused on subsequent searches (such as in an
+    /// iterator). For searches on a different haystack, then a new prefilter
+    /// state should be used.
+    ///
+    /// This always initializes a valid (but possibly inert) prefilter state
+    /// even if this searcher does not have a prefilter enabled.
     fn prefilter_state(&self) -> PrefilterState {
         if self.prefn.is_none() {
             PrefilterState::inert()
@@ -735,13 +754,12 @@ impl<'n> Searcher<'n> {
         let kind = match self.kind {
             Empty => Empty,
             OneByte(b) => OneByte(b),
-            TwoWay(ref tw) => TwoWay(tw.as_ref()),
+            TwoWay(tw) => TwoWay(tw),
         };
         Searcher {
             config: self.config,
             needle: CowBytes::new(self.needle()),
-            rarebytes: self.rarebytes,
-            nhash: self.nhash,
+            ninfo: self.ninfo,
             prefn: self.prefn,
             kind,
         }
@@ -753,13 +771,12 @@ impl<'n> Searcher<'n> {
         let kind = match self.kind {
             Empty => Empty,
             OneByte(b) => OneByte(b),
-            TwoWay(tw) => TwoWay(tw.into_owned()),
+            TwoWay(tw) => TwoWay(tw),
         };
         Searcher {
             config: self.config,
             needle: self.needle.into_owned(),
-            rarebytes: self.rarebytes,
-            nhash: self.nhash,
+            ninfo: self.ninfo,
             prefn: self.prefn,
             kind,
         }
@@ -788,13 +805,22 @@ impl<'n> Searcher<'n> {
                 // can't run), it's faster to just run RK.
                 if haystack.len() < prefilter::minimum_len(haystack, needle) {
                     return rabinkarp::find_with(
-                        &self.nhash,
+                        &self.ninfo.nhash,
                         haystack,
                         needle,
                     );
                 }
-                tw.find_with(prestate, haystack)
+                tw.find(prestate, self.prefn, &self.ninfo, haystack, needle)
             }
+        }
+    }
+}
+
+impl NeedleInfo {
+    pub(crate) fn new(needle: &[u8]) -> NeedleInfo {
+        NeedleInfo {
+            rarebytes: RareNeedleBytes::forward(needle),
+            nhash: NeedleHash::forward(needle),
         }
     }
 }
@@ -813,11 +839,11 @@ struct SearcherRev<'n> {
     /// A Rabin-Karp hash of the needle.
     nhash: NeedleHash,
     /// The actual substring implementation in use.
-    kind: SearcherRevKind<'n>,
+    kind: SearcherRevKind,
 }
 
 #[derive(Clone, Debug)]
-enum SearcherRevKind<'n> {
+enum SearcherRevKind {
     /// A special case for empty needles. An empty needle always matches, even
     /// in an empty haystack.
     Empty,
@@ -827,15 +853,23 @@ enum SearcherRevKind<'n> {
     /// Two-Way is the generic work horse and is what provides our additive
     /// linear time guarantee. In general, it's used when the needle is bigger
     /// than 8 bytes or so.
-    TwoWay(twoway::Reverse<'n>),
+    TwoWay(twoway::Reverse),
 }
 
 impl<'n> SearcherRev<'n> {
     fn new(needle: &'n [u8]) -> SearcherRev<'n> {
-        let kind = todo!();
+        use self::SearcherRevKind::*;
+
+        let kind = if needle.len() == 0 {
+            Empty
+        } else if needle.len() == 1 {
+            OneByte(needle[0])
+        } else {
+            TwoWay(twoway::Reverse::new(needle))
+        };
         SearcherRev {
             needle: CowBytes::new(needle),
-            nhash: NeedleHash::forward(needle),
+            nhash: NeedleHash::reverse(needle),
             kind,
         }
     }
@@ -850,7 +884,7 @@ impl<'n> SearcherRev<'n> {
         let kind = match self.kind {
             Empty => Empty,
             OneByte(b) => OneByte(b),
-            TwoWay(ref tw) => TwoWay(tw.as_ref()),
+            TwoWay(tw) => TwoWay(tw),
         };
         SearcherRev {
             needle: CowBytes::new(self.needle()),
@@ -865,7 +899,7 @@ impl<'n> SearcherRev<'n> {
         let kind = match self.kind {
             Empty => Empty,
             OneByte(b) => OneByte(b),
-            TwoWay(tw) => TwoWay(tw.into_owned()),
+            TwoWay(tw) => TwoWay(tw),
         };
         SearcherRev {
             needle: self.needle.into_owned(),
@@ -874,7 +908,7 @@ impl<'n> SearcherRev<'n> {
         }
     }
 
-    fn find(&self, haystack: &[u8]) -> Option<usize> {
+    fn rfind(&self, haystack: &[u8]) -> Option<usize> {
         use self::SearcherRevKind::*;
 
         let needle = self.needle();
@@ -894,7 +928,7 @@ impl<'n> SearcherRev<'n> {
                         needle,
                     );
                 }
-                tw.rfind(haystack)
+                tw.rfind(haystack, needle)
             }
         }
     }

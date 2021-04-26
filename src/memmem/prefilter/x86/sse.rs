@@ -1,9 +1,12 @@
 use core::arch::x86_64::__m128i;
 
-use crate::memmem::prefilter::{NeedleInfo, PrefilterFn, PrefilterState};
+use crate::memmem::{
+    prefilter::{PrefilterFnTy, PrefilterState},
+    NeedleInfo,
+};
 
 // Check that the functions below satisfy the Prefilter function type.
-const _: PrefilterFn = find;
+const _: PrefilterFnTy = find;
 
 /// An SSE2 accelerated candidate finder for single-substring search.
 #[target_feature(enable = "sse2")]
@@ -23,7 +26,7 @@ pub(crate) unsafe fn find(
         haystack: &[u8],
         needle: &[u8],
     ) -> Option<usize> {
-        let (rare, _) = ninfo.as_rare_ordered_usize();
+        let (rare, _) = ninfo.rarebytes.as_rare_ordered_usize();
         crate::memchr(needle[rare], haystack).map(|i| i.saturating_sub(rare))
     }
     super::super::genericsimd::find::<__m128i>(

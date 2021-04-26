@@ -1,8 +1,9 @@
 use core::mem::size_of;
 
 use crate::memmem::{
-    prefilter::{NeedleInfo, PrefilterFn, PrefilterState},
+    prefilter::{PrefilterFnTy, PrefilterState},
     vector::Vector,
+    NeedleInfo,
 };
 
 /// The implementation of the forward vector accelerated candidate finder.
@@ -42,10 +43,10 @@ pub(crate) unsafe fn find<V: Vector>(
     ninfo: &NeedleInfo,
     haystack: &[u8],
     needle: &[u8],
-    fallback: PrefilterFn,
+    fallback: PrefilterFnTy,
 ) -> Option<usize> {
     assert!(needle.len() >= 2, "needle must be at least 2 bytes");
-    let (rare1i, rare2i) = ninfo.as_rare_ordered_usize();
+    let (rare1i, rare2i) = ninfo.rarebytes.as_rare_ordered_usize();
     let min_haystack_len = rare2i + size_of::<V>();
     if haystack.len() < min_haystack_len {
         return fallback(prestate, ninfo, haystack, needle);

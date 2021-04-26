@@ -125,7 +125,7 @@ impl NeedleHash {
 
     /// Create a new Rabin-Karp hash for the given needle for use in reverse
     /// searching.
-    fn reverse(needle: &[u8]) -> NeedleHash {
+    pub(crate) fn reverse(needle: &[u8]) -> NeedleHash {
         let mut nh = NeedleHash { hash: Hash::new(), hash_2pow: 1 };
         if needle.is_empty() {
             return nh;

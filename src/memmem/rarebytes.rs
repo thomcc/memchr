@@ -35,6 +35,13 @@ pub(crate) struct RareNeedleBytes {
 }
 
 impl RareNeedleBytes {
+    /// Create a new pair of rare needle bytes with the given offsets. This is
+    /// only used in tests for generating input data.
+    #[cfg(test)]
+    pub(crate) fn new(rare1i: u8, rare2i: u8) -> RareNeedleBytes {
+        RareNeedleBytes { rare1i, rare2i }
+    }
+
     /// Detect the leftmost offsets of the two rarest bytes in the given
     /// needle.
     pub(crate) fn forward(needle: &[u8]) -> RareNeedleBytes {
@@ -102,6 +109,14 @@ impl RareNeedleBytes {
     /// and thus, callers may want to treat it differently from rare2.
     pub(crate) fn as_rare_usize(&self) -> (usize, usize) {
         (self.rare1i as usize, self.rare2i as usize)
+    }
+
+    /// Return the byte frequency rank of each byte. The higher the rank, the
+    /// more frequency the byte is predicted to be. The needle given must be
+    /// the same one given to the RareNeedleBytes constructor.
+    pub(crate) fn as_ranks(&self, needle: &[u8]) -> (usize, usize) {
+        let (b1, b2) = self.as_rare_bytes(needle);
+        (rank(b1), rank(b2))
     }
 }
 

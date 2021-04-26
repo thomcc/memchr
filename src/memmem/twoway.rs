@@ -3,29 +3,18 @@ use core::cmp;
 use crate::{
     cow::CowBytes,
     memmem::{
-        prefilter::{Freqy, Prefilter, PrefilterState},
-        rabinkarp, util,
+        prefilter::{self, PrefilterFn, PrefilterState},
+        rabinkarp, util, NeedleInfo,
     },
 };
 
 /// Two-Way search in the forward direction.
-#[derive(Clone, Debug)]
-pub(crate) struct Forward<'n>(TwoWay<'n>);
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Forward(TwoWay);
 
 /// Two-Way search in the reverse direction.
-#[derive(Clone, Debug)]
-pub(crate) struct Reverse<'n>(TwoWay<'n>);
-
-/// The configuration to use for Two-Way. A configuration alters the behavior
-/// of Two-Way in a way that callers can control. Currently, "altering the
-/// behavior" only refers to changing its performance characteristics. (But
-/// never its time/space complexity.)
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Config {
-    /// This permits changing the behavior of the prefilter, since it can have
-    /// a variable impact on performance.
-    pub(crate) prefilter: Prefilter,
-}
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Reverse(TwoWay);
 
 /// An implementation of the TwoWay substring search algorithm, with heuristics
 /// for accelerating search based on frequency analysis.
@@ -62,21 +51,8 @@ pub(crate) struct Config {
 ///
 /// This type is wrapped in Forward and Reverse types that expose consistent
 /// forward or reverse APIs.
-#[derive(Clone, Debug)]
-struct TwoWay<'n> {
-    /// The needle that we're looking for.
-    needle: CowBytes<'n>,
-    /// An implementation of a fast skip loop based on hard-coded frequency
-    /// data. This is only used when conditions are deemed favorable. That is,
-    /// the number of skipped bytes is tracked, and if it's too low after a
-    /// certain number of skips, the prefilter is disabled.
-    ///
-    /// While it's a heuristic, the fact that we disable it is important for
-    /// holding up our time complexity guarantee. Since without a heuristic
-    /// to disable the prefilter, it's possible for pathological inputs to
-    /// cause worst case multiplicative behavior (in the size of the needle and
-    /// haystack).
-    pre: Freqy,
+#[derive(Clone, Copy, Debug)]
+struct TwoWay {
     /// A small bitset used as a quick prefilter (in addition to the faster
     /// SIMD based prefilter). Namely, a bit 'i' is set if and only if b%64==i
     /// for any b in the needle.
@@ -104,15 +80,14 @@ struct TwoWay<'n> {
     shift: Shift,
 }
 
-impl<'n> Forward<'n> {
+impl Forward {
     /// Create a searcher that uses the Two-Way algorithm by searching forwards
     /// through any haystack.
-    pub(crate) fn new(config: Config, needle: &'n [u8]) -> Forward<'n> {
+    pub(crate) fn new(needle: &[u8]) -> Forward {
         if needle.is_empty() {
             return Forward(TwoWay::empty());
         }
 
-        let pre = Freqy::forward(&config.prefilter, needle);
         let byteset = ApproximateByteSet::new(needle);
         let min_suffix = Suffix::forward(needle, SuffixKind::Minimal);
         let max_suffix = Suffix::forward(needle, SuffixKind::Maximal);
@@ -123,52 +98,7 @@ impl<'n> Forward<'n> {
                 (max_suffix.period, max_suffix.pos)
             };
         let shift = Shift::forward(needle, period_lower_bound, critical_pos);
-        let needle = CowBytes::new(needle);
-        Forward(TwoWay { needle, pre, byteset, critical_pos, shift })
-    }
-
-    /// Return a fresh prefilter state that can be used with this searcher.
-    /// A prefilter state is used to track the effectiveness of a searcher's
-    /// prefilter for speeding up searches. Therefore, the prefilter state
-    /// should generally be reused on subsequent searches (such as in an
-    /// iterator). For searches on a different haystack, then a new prefilter
-    /// state should be used.
-    ///
-    /// This always initializes a valid prefilter state even if this searcher
-    /// does not have a prefilter enabled.
-    #[inline(always)]
-    pub(crate) fn prefilter_state(&self) -> PrefilterState {
-        self.0.pre.state()
-    }
-
-    /// Return the needle used by this searcher.
-    #[inline(always)]
-    pub(crate) fn needle(&self) -> &[u8] {
-        self.0.needle.as_slice()
-    }
-
-    /// Convert this searcher into a borrowed version, where the needle is
-    /// borrowed.
-    #[inline(always)]
-    pub(crate) fn as_ref(&self) -> Forward<'_> {
-        Forward(self.0.as_ref())
-    }
-
-    /// Convert this searcher into an owned version, where the needle is
-    /// copied if it isn't already owned.
-    #[cfg(feature = "std")]
-    #[inline(always)]
-    pub(crate) fn into_owned(self) -> Forward<'static> {
-        Forward(self.0.into_owned())
-    }
-
-    /// Find the position of the first occurrence of this searcher's needle in
-    /// the given haystack. If one does not exist, then return None.
-    ///
-    /// This will automatically initialize prefilter state. This should only
-    /// be used for one-off searches.
-    pub(crate) fn find(&self, haystack: &[u8]) -> Option<usize> {
-        self.find_with(&mut self.prefilter_state(), haystack)
+        Forward(TwoWay { byteset, critical_pos, shift })
     }
 
     /// Find the position of the first occurrence of this searcher's needle in
@@ -176,63 +106,78 @@ impl<'n> Forward<'n> {
     ///
     /// This accepts prefilter state that is useful when using the same
     /// searcher multiple times, such as in an iterator.
-    #[inline(always)]
-    pub(crate) fn find_with(
+    ///
+    /// Callers must guarantee that the needle is non-empty and its length is
+    /// <= the haystack's length.
+    pub(crate) fn find(
         &self,
         prestate: &mut PrefilterState,
-        haystack: &[u8],
-    ) -> Option<usize> {
-        let needle = self.0.needle.as_slice();
-        if needle.len() <= 1 {
-            if needle.is_empty() {
-                // The empty needle matches at all positions.
-                Some(0)
-            } else {
-                // We special case a single-byte needle to make things a bit
-                // faster. Our prefilter infrastructure could be made to
-                // handle it, but doing it this way has less overhead. This is
-                // particularly impactful for common bytes.
-                crate::memchr(needle[0], haystack)
-            }
-        } else if haystack.len() < needle.len() {
-            None
-        } else if haystack.len() < min_prefilter_len(haystack, needle) {
-            rabinkarp::find_with(&self.0.pre.ninfo.nhash, haystack, needle)
-        } else {
-            self.find_with_imp(prestate, haystack, needle)
-        }
-    }
-
-    #[inline(never)]
-    fn find_with_imp(
-        &self,
-        prestate: &mut PrefilterState,
+        prefn: Option<PrefilterFn>,
+        ninfo: &NeedleInfo,
         haystack: &[u8],
         needle: &[u8],
     ) -> Option<usize> {
+        debug_assert!(!needle.is_empty(), "needle should not be empty");
+        debug_assert!(needle.len() <= haystack.len(), "haystack too short");
+
         match self.0.shift {
             Shift::Small { period } => {
-                if should_prefilter(prestate, haystack, needle) {
+                if let Some(prefn) =
+                    should_prefilter(prestate, prefn, haystack, needle)
+                {
                     self.find_small_imp(
-                        prestate, true, haystack, needle, period,
+                        prestate,
+                        Some(prefn),
+                        ninfo,
+                        haystack,
+                        needle,
+                        period,
                     )
                 } else {
                     self.find_small_imp(
-                        prestate, false, haystack, needle, period,
+                        prestate, None, ninfo, haystack, needle, period,
                     )
                 }
             }
             Shift::Large { shift } => {
-                if should_prefilter(prestate, haystack, needle) {
+                if let Some(prefn) =
+                    should_prefilter(prestate, prefn, haystack, needle)
+                {
                     self.find_large_imp(
-                        prestate, true, haystack, needle, shift,
+                        prestate,
+                        Some(prefn),
+                        ninfo,
+                        haystack,
+                        needle,
+                        shift,
                     )
                 } else {
                     self.find_large_imp(
-                        prestate, false, haystack, needle, shift,
+                        prestate, None, ninfo, haystack, needle, shift,
                     )
                 }
             }
+        }
+    }
+
+    /// Like find, but handles the degenerate substring test cases. This is
+    /// only useful for conveniently testing this substring implementation in
+    /// isolation.
+    #[cfg(test)]
+    fn find_general(
+        &self,
+        prestate: &mut PrefilterState,
+        prefn: Option<PrefilterFn>,
+        ninfo: &NeedleInfo,
+        haystack: &[u8],
+        needle: &[u8],
+    ) -> Option<usize> {
+        if needle.is_empty() {
+            Some(0)
+        } else if haystack.len() < needle.len() {
+            None
+        } else {
+            self.find(prestate, prefn, ninfo, haystack, needle)
         }
     }
 
@@ -245,7 +190,8 @@ impl<'n> Forward<'n> {
     fn find_small_imp(
         &self,
         prestate: &mut PrefilterState,
-        prefilter: bool,
+        prefn: Option<PrefilterFn>,
+        ninfo: &NeedleInfo,
         haystack: &[u8],
         needle: &[u8],
         period: usize,
@@ -255,12 +201,19 @@ impl<'n> Forward<'n> {
         let mut shift = 0;
         while pos + needle.len() <= haystack.len() {
             let mut i = cmp::max(self.0.critical_pos, shift);
-            if prefilter && prestate.is_effective() {
-                pos += self.0.pre.find(prestate, &haystack[pos..], needle)?;
-                shift = 0;
-                i = self.0.critical_pos;
-                if pos + needle.len() > haystack.len() {
-                    return None;
+            if let Some(prefn) = prefn {
+                if prestate.is_effective() {
+                    pos += prefn.call(
+                        prestate,
+                        ninfo,
+                        &haystack[pos..],
+                        needle,
+                    )?;
+                    shift = 0;
+                    i = self.0.critical_pos;
+                    if pos + needle.len() > haystack.len() {
+                        return None;
+                    }
                 }
             }
             if !self.0.byteset.contains(haystack[pos + last_byte]) {
@@ -293,7 +246,8 @@ impl<'n> Forward<'n> {
     fn find_large_imp(
         &self,
         prestate: &mut PrefilterState,
-        prefilter: bool,
+        prefn: Option<PrefilterFn>,
+        ninfo: &NeedleInfo,
         haystack: &[u8],
         needle: &[u8],
         shift: usize,
@@ -301,10 +255,17 @@ impl<'n> Forward<'n> {
         let last_byte = needle.len() - 1;
         let mut pos = 0;
         'outer: while pos + needle.len() <= haystack.len() {
-            if prefilter && prestate.is_effective() {
-                pos += self.0.pre.find(prestate, &haystack[pos..], needle)?;
-                if pos + needle.len() > haystack.len() {
-                    return None;
+            if let Some(prefn) = prefn {
+                if prestate.is_effective() {
+                    pos += prefn.call(
+                        prestate,
+                        ninfo,
+                        &haystack[pos..],
+                        needle,
+                    )?;
+                    if pos + needle.len() > haystack.len() {
+                        return None;
+                    }
                 }
             }
 
@@ -332,15 +293,14 @@ impl<'n> Forward<'n> {
     }
 }
 
-impl<'n> Reverse<'n> {
+impl Reverse {
     /// Create a searcher that uses the Two-Way algorithm by searching in
     /// reverse through any haystack.
-    pub(crate) fn new(needle: &'n [u8]) -> Reverse<'n> {
+    pub(crate) fn new(needle: &[u8]) -> Reverse {
         if needle.is_empty() {
             return Reverse(TwoWay::empty());
         }
 
-        let pre = Freqy::inert();
         let byteset = ApproximateByteSet::new(needle);
         let min_suffix = Suffix::reverse(needle, SuffixKind::Minimal);
         let max_suffix = Suffix::reverse(needle, SuffixKind::Maximal);
@@ -351,29 +311,7 @@ impl<'n> Reverse<'n> {
                 (max_suffix.period, max_suffix.pos)
             };
         let shift = Shift::reverse(needle, period_lower_bound, critical_pos);
-        let needle = CowBytes::new(needle);
-        Reverse(TwoWay { needle, pre, byteset, critical_pos, shift })
-    }
-
-    /// Return the needle used by this searcher.
-    #[inline(always)]
-    pub(crate) fn needle(&self) -> &[u8] {
-        self.0.needle.as_slice()
-    }
-
-    /// Convert this searcher into a borrow version, where the needle is
-    /// borrowed.
-    #[inline(always)]
-    pub(crate) fn as_ref(&self) -> Reverse<'_> {
-        Reverse(self.0.as_ref())
-    }
-
-    /// Convert this searcher into an owned version, where the needle is
-    /// copied if it isn't already owned.
-    #[cfg(feature = "std")]
-    #[inline(always)]
-    pub(crate) fn into_owned(self) -> Reverse<'static> {
-        Reverse(self.0.into_owned())
+        Reverse(TwoWay { byteset, critical_pos, shift })
     }
 
     /// Find the position of the last occurrence of this searcher's needle
@@ -381,23 +319,20 @@ impl<'n> Reverse<'n> {
     ///
     /// This will automatically initialize prefilter state. This should only
     /// be used for one-off searches.
-    pub(crate) fn rfind(&self, haystack: &[u8]) -> Option<usize> {
+    ///
+    /// Callers must guarantee that the needle is non-empty and its length is
+    /// <= the haystack's length.
+    pub(crate) fn rfind(
+        &self,
+        haystack: &[u8],
+        needle: &[u8],
+    ) -> Option<usize> {
+        debug_assert!(!needle.is_empty(), "needle should not be empty");
+        debug_assert!(needle.len() <= haystack.len(), "haystack too short");
         // For the reverse case, we don't use a prefilter. It's plausible that
         // perhaps we should, but it's a lot of additional code to do it, and
         // it's not clear that it's actually worth it. If you have a really
         // compelling use case for this, please file an issue.
-
-        let needle = self.0.needle.as_slice();
-        if needle.is_empty() {
-            return Some(haystack.len());
-        } else if haystack.len() < needle.len() {
-            return None;
-        } else if needle.len() == 1 {
-            // See the forward case above for why we special single-byte
-            // needles instead of making our prefilter infrastructure handle
-            // it.
-            return crate::memrchr(needle[0], haystack);
-        }
         match self.0.shift {
             Shift::Small { period } => {
                 self.rfind_small_imp(haystack, needle, period)
@@ -405,6 +340,20 @@ impl<'n> Reverse<'n> {
             Shift::Large { shift } => {
                 self.rfind_large_imp(haystack, needle, shift)
             }
+        }
+    }
+
+    /// Like rfind, but handles the degenerate substring test cases. This is
+    /// only useful for conveniently testing this substring implementation in
+    /// isolation.
+    #[cfg(test)]
+    fn rfind_general(&self, haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        if needle.is_empty() {
+            Some(haystack.len())
+        } else if haystack.len() < needle.len() {
+            None
+        } else {
+            self.rfind(haystack, needle)
         }
     }
 
@@ -481,38 +430,12 @@ impl<'n> Reverse<'n> {
     }
 }
 
-impl<'n> TwoWay<'n> {
-    #[inline(always)]
-    fn empty() -> TwoWay<'static> {
+impl TwoWay {
+    fn empty() -> TwoWay {
         TwoWay {
-            needle: CowBytes::new(b""),
-            pre: Freqy::inert(),
             byteset: ApproximateByteSet::new(b""),
             critical_pos: 0,
             shift: Shift::Large { shift: 0 },
-        }
-    }
-
-    #[inline(always)]
-    fn as_ref(&self) -> TwoWay<'_> {
-        TwoWay {
-            needle: CowBytes::new(self.needle.as_slice()),
-            pre: self.pre.clone(),
-            byteset: self.byteset,
-            critical_pos: self.critical_pos,
-            shift: self.shift.clone(),
-        }
-    }
-
-    #[cfg(feature = "std")]
-    #[inline(always)]
-    fn into_owned(self) -> TwoWay<'static> {
-        TwoWay {
-            needle: self.needle.into_owned(),
-            pre: self.pre.clone(),
-            byteset: self.byteset,
-            critical_pos: self.critical_pos,
-            shift: self.shift,
         }
     }
 }
@@ -547,7 +470,7 @@ impl<'n> TwoWay<'n> {
 /// then we could collapse this case analysis and simplify the algorithm. The
 /// Two-Way paper suggests this is possible, but more reading is required to
 /// grok why the authors didn't pursue that path.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 enum Shift {
     Small { period: usize },
     Large { shift: usize },
@@ -795,30 +718,17 @@ impl ApproximateByteSet {
 /// prefilter state, haystack and needle.
 fn should_prefilter(
     prestate: &mut PrefilterState,
+    prefn: Option<PrefilterFn>,
     haystack: &[u8],
     needle: &[u8],
-) -> bool {
+) -> Option<PrefilterFn> {
     if !prestate.is_effective() {
-        return false;
+        return None;
     }
-    haystack.len() > min_prefilter_len(haystack, needle)
-}
-
-/// Return the minimum length of the haystack in which a prefilter should be
-/// used. If the haystack is below this length, then it's probably not worth
-/// the overhead of running the prefilter.
-fn min_prefilter_len(_haystack: &[u8], needle: &[u8]) -> usize {
-    /// If the haystack length isn't greater than needle.len() * FACTOR, then
-    /// no prefilter will be used. The presumption here is that since there
-    /// are so few bytes to check, it's not worth running the prefilter since
-    /// there will need to be a validation step anyway. Thus, the prefilter is
-    /// largely redundant work.
-    ///
-    /// Increase the factor noticeably hurts the
-    /// memmem/krate/prebuilt/teeny-*/never-john-watson benchmarks.
-    const PREFILTER_LENGTH_FACTOR: usize = 2;
-    const VECTOR_MIN_LENGTH: usize = 16;
-    core::cmp::max(VECTOR_MIN_LENGTH, PREFILTER_LENGTH_FACTOR * needle.len())
+    if haystack.len() < prefilter::minimum_len(haystack, needle) {
+        return None;
+    }
+    prefn
 }
 
 #[cfg(all(test, feature = "std", not(miri)))]
@@ -827,19 +737,10 @@ mod tests {
 
     use super::*;
 
-    mod props_nopre {
-        define_memmem_quickcheck_tests!(
-            super::simpletests::twoway_find_nopre,
-            super::simpletests::twoway_rfind
-        );
-    }
-    // Just run the reverse tests again, since reverse doesn't do prefilters.
-    mod props_pre {
-        define_memmem_quickcheck_tests!(
-            super::simpletests::twoway_find_pre,
-            super::simpletests::twoway_rfind
-        );
-    }
+    define_memmem_quickcheck_tests!(
+        super::simpletests::twoway_find,
+        super::simpletests::twoway_rfind
+    );
 
     /// Convenience wrapper for computing the suffix as a byte string.
     fn get_suffix_forward(needle: &[u8], kind: SuffixKind) -> (&[u8], usize) {
@@ -1013,40 +914,28 @@ mod tests {
 mod simpletests {
     use super::*;
 
-    pub(crate) fn twoway_find_nopre(
+    pub(crate) fn twoway_find(
         haystack: &[u8],
         needle: &[u8],
     ) -> Option<usize> {
-        let config = Config { prefilter: Prefilter::None };
-        Forward::new(config, needle).find(haystack)
-    }
-
-    pub(crate) fn twoway_find_pre(
-        haystack: &[u8],
-        needle: &[u8],
-    ) -> Option<usize> {
-        let config = Config { prefilter: Prefilter::Auto };
-        Forward::new(config, needle).find(haystack)
+        let mut prestate = PrefilterState::inert();
+        let prefn = None;
+        let ninfo = NeedleInfo::new(needle);
+        Forward::new(needle).find_general(
+            &mut prestate,
+            prefn,
+            &ninfo,
+            haystack,
+            needle,
+        )
     }
 
     pub(crate) fn twoway_rfind(
         haystack: &[u8],
         needle: &[u8],
     ) -> Option<usize> {
-        Reverse::new(needle).rfind(haystack)
+        Reverse::new(needle).rfind_general(haystack, needle)
     }
 
-    mod simple_nopre {
-        define_memmem_simple_tests!(
-            super::twoway_find_nopre,
-            super::twoway_rfind
-        );
-    }
-    // Just run the reverse tests again, since reverse doesn't do prefilters.
-    mod simple_pre {
-        define_memmem_simple_tests!(
-            super::twoway_find_pre,
-            super::twoway_rfind
-        );
-    }
+    define_memmem_simple_tests!(twoway_find, twoway_rfind);
 }
