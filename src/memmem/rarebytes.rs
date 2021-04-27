@@ -97,10 +97,17 @@ impl RareNeedleBytes {
     /// rare1 is rarer than rare2, but just wants to ensure that they are
     /// ordered with respect to one another.
     pub(crate) fn as_rare_ordered_usize(&self) -> (usize, usize) {
+        let (rare1i, rare2i) = self.as_rare_ordered_u8();
+        (rare1i as usize, rare2i as usize)
+    }
+
+    /// Like as_rare_ordered_usize, but returns the offsets as their native
+    /// u8 values.
+    pub(crate) fn as_rare_ordered_u8(&self) -> (u8, u8) {
         if self.rare1i <= self.rare2i {
-            (self.rare1i as usize, self.rare2i as usize)
+            (self.rare1i, self.rare2i)
         } else {
-            (self.rare2i as usize, self.rare1i as usize)
+            (self.rare2i, self.rare1i)
         }
     }
 
