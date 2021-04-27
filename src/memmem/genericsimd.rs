@@ -2,6 +2,7 @@ use core::mem::size_of;
 
 use crate::memmem::{
     prefilter::{PrefilterFnTy, PrefilterState},
+    util::memcmp,
     vector::Vector,
     NeedleInfo,
 };
@@ -26,8 +27,8 @@ use crate::memmem::{
 /// case for accelerated reverse search, please file an issue.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Forward {
-    needle: u64,
-    mask: u64,
+    needle: u128,
+    mask: u128,
     rare1i: u8,
     rare2i: u8,
 }
@@ -41,22 +42,25 @@ impl Forward {
         // if the rare bytes detected are at the same position. (It likely
         // suggests a degenerate case, although it should technically not be
         // possible.)
-        if needle.len() < 2 || needle.len() > 8 || rare1i == rare2i {
+        if needle.len() < 2 || needle.len() > 16 || rare1i == rare2i {
             return None;
         }
-        let mask =
-            if needle.len() == 8 { !0 } else { (1 << (8 * needle.len())) - 1 };
-        let mut needle64 = 0u64;
-        // SAFETY: We've ensured that needle.len() <= 8 and any bit pattern is
-        // valid for a u64. Finally, copy_to_nonoverlapping handles unaligned
+        let mask = if needle.len() == 16 {
+            !0
+        } else {
+            (1 << (8 * needle.len())) - 1
+        };
+        let mut needle_int = 0u128;
+        // SAFETY: We've ensured that needle.len() <= 16 and any bit pattern is
+        // valid for a u128. Finally, copy_to_nonoverlapping handles unaligned
         // loads, so alignment is not a concern.
         unsafe {
             needle.as_ptr().copy_to_nonoverlapping(
-                &mut needle64 as *mut u64 as *mut u8,
+                &mut needle_int as *mut u128 as *mut u8,
                 needle.len(),
             );
         }
-        Some(Forward { needle: needle64, mask, rare1i, rare2i })
+        Some(Forward { needle: needle_int, mask, rare1i, rare2i })
     }
 
     /// Returns the minimum length of haystack that is needed for this searcher
@@ -100,7 +104,7 @@ pub(crate) unsafe fn fwd_find<V: Vector>(
     assert!(haystack.len() >= min_haystack_len, "haystack too small");
     debug_assert!(needle.len() <= haystack.len());
     debug_assert!(needle.len() >= 2, "needle must be at least 2 bytes");
-    debug_assert!(needle.len() <= 8, "needle must be at most 8 bytes");
+    debug_assert!(needle.len() <= 16, "needle must be at most 16 bytes");
 
     let (rare1i, rare2i) = (fwd.rare1i as usize, fwd.rare2i as usize);
     let rare1chunk = V::splat(needle[rare1i]);
@@ -109,7 +113,6 @@ pub(crate) unsafe fn fwd_find<V: Vector>(
     let start_ptr = haystack.as_ptr();
     let end_ptr = start_ptr.add(haystack.len());
     let max_ptr = end_ptr.sub(min_haystack_len);
-    let max_start_ptr = end_ptr.sub(needle.len());
     let mut ptr = start_ptr;
 
     // N.B. I did experiment with unrolling the loop to deal with size(V)
@@ -119,12 +122,7 @@ pub(crate) unsafe fn fwd_find<V: Vector>(
     // used the memmem/krate/prebuilt/huge-en/ benchmarks to compare.
     while ptr <= max_ptr {
         let m = fwd_find_in_chunk2(
-            fwd,
-            ptr,
-            max_start_ptr,
-            rare1chunk,
-            rare2chunk,
-            !0,
+            fwd, needle, ptr, end_ptr, rare1chunk, rare2chunk, !0,
         );
         if let Some(chunki) = m {
             return Some(matched(start_ptr, ptr, chunki));
@@ -166,12 +164,7 @@ pub(crate) unsafe fn fwd_find<V: Vector>(
         let mask = !((1 << overlap) - 1);
         ptr = max_ptr;
         let m = fwd_find_in_chunk2(
-            fwd,
-            ptr,
-            max_start_ptr,
-            rare1chunk,
-            rare2chunk,
-            mask,
+            fwd, needle, ptr, end_ptr, rare1chunk, rare2chunk, mask,
         );
         if let Some(chunki) = m {
             return Some(matched(start_ptr, ptr, chunki));
@@ -182,15 +175,18 @@ pub(crate) unsafe fn fwd_find<V: Vector>(
 
 /// Search for an occurrence of two rare bytes from the needle in the current
 /// chunk pointed to by ptr. It must be valid to do an unaligned read of
-/// size(V) bytes starting at both (ptr + rare1i) and (ptr + rare2i).
+/// size(V) bytes starting at both (ptr + rare1i) and (ptr + rare2i). It
+/// must also be valid to do an unaligned read of 16 bytes starting at
+/// max_start_ptr.
 ///
 /// rare1chunk and rare2chunk correspond to vectors with the rare1 and rare2
 /// bytes repeated in each 8-bit lane, respectively.
 #[inline(always)]
 unsafe fn fwd_find_in_chunk2<V: Vector>(
     fwd: &Forward,
+    needle: &[u8],
     ptr: *const u8,
-    max_start_ptr: *const u8,
+    end_ptr: *const u8,
     rare1chunk: V,
     rare2chunk: V,
     mask: u32,
@@ -205,11 +201,11 @@ unsafe fn fwd_find_in_chunk2<V: Vector>(
     while match_offsets != 0 {
         let offset = match_offsets.trailing_zeros() as usize;
         let ptr = ptr.add(offset);
-        if ptr > max_start_ptr {
+        if end_ptr.sub(needle.len()) < ptr {
             return None;
         }
-        let chunk = (ptr as *const u64).read_unaligned();
-        if (chunk & fwd.mask) == fwd.needle {
+        let chunk = core::slice::from_raw_parts(ptr, needle.len());
+        if memcmp(needle, chunk) {
             return Some(offset);
         }
         match_offsets &= match_offsets - 1;
@@ -220,16 +216,10 @@ unsafe fn fwd_find_in_chunk2<V: Vector>(
 /// Accepts a chunk-relative offset and returns a haystack relative offset
 /// after updating the prefilter state.
 ///
-/// Why do we use this unlineable function when a search completes? Well,
-/// I don't know. Really. Obviously this function was not here initially.
-/// When doing profiling, the codegen for the inner loop here looked bad and
-/// I didn't know why. There were a couple extra 'add' instructions and an
-/// extra 'lea' instruction that I couldn't explain. I hypothesized that the
-/// optimizer was having trouble untangling the hot code in the loop from the
-/// code that deals with a candidate match. By putting the latter into an
-/// unlineable function, it kind of forces the issue and it had the intended
-/// effect: codegen improved measurably. It's good for a ~10% improvement
-/// across the board on the memmem/krate/prebuilt/huge-en/ benchmarks.
+/// See the same function with the same name in the prefilter variant of this
+/// algorithm to learned why it's tagged with inline(never). Even here, where
+/// the function is simpler, inlining it leads to poorer codegen. (Although
+/// it does improve some benchmarks, like prebuiltiter/huge-en/common-you.)
 #[cold]
 #[inline(never)]
 fn matched(start_ptr: *const u8, ptr: *const u8, chunki: usize) -> usize {
