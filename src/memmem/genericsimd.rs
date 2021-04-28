@@ -27,8 +27,6 @@ use crate::memmem::{
 /// case for accelerated reverse search, please file an issue.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Forward {
-    needle: u128,
-    mask: u128,
     rare1i: u8,
     rare2i: u8,
 }
@@ -45,22 +43,7 @@ impl Forward {
         if needle.len() < 2 || needle.len() > 16 || rare1i == rare2i {
             return None;
         }
-        let mask = if needle.len() == 16 {
-            !0
-        } else {
-            (1 << (8 * needle.len())) - 1
-        };
-        let mut needle_int = 0u128;
-        // SAFETY: We've ensured that needle.len() <= 16 and any bit pattern is
-        // valid for a u128. Finally, copy_to_nonoverlapping handles unaligned
-        // loads, so alignment is not a concern.
-        unsafe {
-            needle.as_ptr().copy_to_nonoverlapping(
-                &mut needle_int as *mut u128 as *mut u8,
-                needle.len(),
-            );
-        }
-        Some(Forward { needle: needle_int, mask, rare1i, rare2i })
+        Some(Forward { rare1i, rare2i })
     }
 
     /// Returns the minimum length of haystack that is needed for this searcher
@@ -121,7 +104,7 @@ pub(crate) unsafe fn fwd_find<V: Vector>(
     // In the end, I decided the complexity from unrolling wasn't worth it. I
     // used the memmem/krate/prebuilt/huge-en/ benchmarks to compare.
     while ptr <= max_ptr {
-        let m = fwd_find_in_chunk2(
+        let m = fwd_find_in_chunk(
             fwd, needle, ptr, end_ptr, rare1chunk, rare2chunk, !0,
         );
         if let Some(chunki) = m {
@@ -163,7 +146,7 @@ pub(crate) unsafe fn fwd_find<V: Vector>(
         // ignored.
         let mask = !((1 << overlap) - 1);
         ptr = max_ptr;
-        let m = fwd_find_in_chunk2(
+        let m = fwd_find_in_chunk(
             fwd, needle, ptr, end_ptr, rare1chunk, rare2chunk, mask,
         );
         if let Some(chunki) = m {
@@ -173,16 +156,20 @@ pub(crate) unsafe fn fwd_find<V: Vector>(
     None
 }
 
-/// Search for an occurrence of two rare bytes from the needle in the current
-/// chunk pointed to by ptr. It must be valid to do an unaligned read of
-/// size(V) bytes starting at both (ptr + rare1i) and (ptr + rare2i). It
-/// must also be valid to do an unaligned read of 16 bytes starting at
-/// max_start_ptr.
+/// Search for an occurrence of two rare bytes from the needle in the chunk
+/// pointed to by ptr. It must be valid to do an unaligned read of size(V)
+/// bytes starting at both (ptr + rare1i) and (ptr + rare2i).
 ///
 /// rare1chunk and rare2chunk correspond to vectors with the rare1 and rare2
 /// bytes repeated in each 8-bit lane, respectively.
+///
+/// mask should have bits set corresponding the positions in the chunk in which
+/// matches are considered. This is only used for the last vector load where
+/// the beginning of the vector might have overlapped with the last load in
+/// the main loop. The mask lets us avoid visiting positions that have already
+/// been discarded as matches.
 #[inline(always)]
-unsafe fn fwd_find_in_chunk2<V: Vector>(
+unsafe fn fwd_find_in_chunk<V: Vector>(
     fwd: &Forward,
     needle: &[u8],
     ptr: *const u8,

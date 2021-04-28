@@ -9,7 +9,7 @@ impl Forward {
     /// Create a new "generic simd" forward searcher. If one could not be
     /// created from the given inputs, then None is returned.
     pub(crate) fn new(ninfo: &NeedleInfo, needle: &[u8]) -> Option<Forward> {
-        if !is_x86_feature_detected!("avx2") {
+        if !cfg!(memchr_runtime_avx) || !is_x86_feature_detected!("avx2") {
             return None;
         }
         genericsimd::Forward::new(ninfo, needle).map(Forward)
@@ -76,10 +76,11 @@ mod tests {
                 // This substring searcher only works on certain configs, so
                 // filter our tests such that Forward::new will be guaranteed
                 // to succeed.
-                let (rare1i, rare2i) = t.ninfo.rarebytes.as_rare_usize();
-                t.haystack.len() >= (t.needle.len() + 32)
+                let (rare1i, rare2i) =
+                    t.ninfo.rarebytes.as_rare_ordered_usize();
+                t.haystack.len() >= (rare2i + 16)
                     && t.needle.len() >= 2
-                    && t.needle.len() <= 8
+                    && t.needle.len() <= 16
                     && rare1i != rare2i
             })
         }

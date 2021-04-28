@@ -2,4 +2,4 @@
 // requires std.
 #[cfg(feature = "std")]
 pub(crate) mod avx;
-// pub(crate) mod sse;
+pub(crate) mod sse;

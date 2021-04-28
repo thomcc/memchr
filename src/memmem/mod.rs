@@ -702,6 +702,8 @@ enum SearcherKind {
     /// than 8 bytes or so.
     TwoWay(twoway::Forward),
     #[cfg(all(not(miri), target_arch = "x86_64", memchr_runtime_simd))]
+    GenericSIMD128(x86::sse::Forward),
+    #[cfg(all(not(miri), target_arch = "x86_64", memchr_runtime_simd))]
     GenericSIMD256(x86::avx::Forward),
 }
 
@@ -719,6 +721,8 @@ impl<'n> Searcher<'n> {
             OneByte(needle[0])
         } else if let Some(fwd) = x86::avx::Forward::new(&ninfo, needle) {
             GenericSIMD256(fwd)
+        } else if let Some(fwd) = x86::sse::Forward::new(&ninfo, needle) {
+            GenericSIMD128(fwd)
         } else {
             TwoWay(twoway::Forward::new(needle))
         };
@@ -775,6 +779,12 @@ impl<'n> Searcher<'n> {
                 target_arch = "x86_64",
                 memchr_runtime_simd
             ))]
+            GenericSIMD128(gs) => GenericSIMD128(gs),
+            #[cfg(all(
+                not(miri),
+                target_arch = "x86_64",
+                memchr_runtime_simd
+            ))]
             GenericSIMD256(gs) => GenericSIMD256(gs),
         };
         Searcher {
@@ -793,6 +803,12 @@ impl<'n> Searcher<'n> {
             Empty => Empty,
             OneByte(b) => OneByte(b),
             TwoWay(tw) => TwoWay(tw),
+            #[cfg(all(
+                not(miri),
+                target_arch = "x86_64",
+                memchr_runtime_simd
+            ))]
+            GenericSIMD128(gs) => GenericSIMD128(gs),
             #[cfg(all(
                 not(miri),
                 target_arch = "x86_64",
@@ -833,6 +849,20 @@ impl<'n> Searcher<'n> {
                     rabinkarp::find_with(&self.ninfo.nhash, haystack, needle)
                 } else {
                     self.find_tw(tw, state, haystack, needle)
+                }
+            }
+            #[cfg(all(
+                not(miri),
+                target_arch = "x86_64",
+                memchr_runtime_simd
+            ))]
+            GenericSIMD128(ref gs) => {
+                // The SIMD matcher can't handle particularly short haystacks,
+                // so we fall back to RK in these cases.
+                if haystack.len() < gs.min_haystack_len() {
+                    rabinkarp::find_with(&self.ninfo.nhash, haystack, needle)
+                } else {
+                    gs.find(haystack, needle)
                 }
             }
             #[cfg(all(

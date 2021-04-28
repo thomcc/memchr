@@ -1,55 +1,80 @@
 use core::arch::x86_64::__m128i;
 
-use crate::memmem::{
-    prefilter::{PrefilterFnTy, PrefilterState},
-    NeedleInfo,
-};
+use crate::memmem::{genericsimd, NeedleInfo};
 
-// Check that the functions below satisfy the Prefilter function type.
-const _: PrefilterFnTy = find;
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Forward(genericsimd::Forward);
 
-/// An SSE2 accelerated candidate finder for single-substring search.
-///
-/// # Safety
-///
-/// Callers must ensure that the sse2 CPU feature is enabled in the current
-/// environment. This feature should be enabled in all x86_64 targets.
-#[target_feature(enable = "sse2")]
-pub(crate) unsafe fn find(
-    prestate: &mut PrefilterState,
-    ninfo: &NeedleInfo,
-    haystack: &[u8],
-    needle: &[u8],
-) -> Option<usize> {
-    // If the haystack is too small for SSE2, then just run memchr on the
-    // rarest byte and be done with it. (It is likely that this code path is
-    // rarely exercised, since a higher level routine will probably dispatch to
-    // Rabin-Karp for such a small haystack.)
-    fn simple_memchr_fallback(
-        _prestate: &mut PrefilterState,
+impl Forward {
+    /// Create a new "generic simd" forward searcher. If one could not be
+    /// created from the given inputs, then None is returned.
+    pub(crate) fn new(ninfo: &NeedleInfo, needle: &[u8]) -> Option<Forward> {
+        if !cfg!(memchr_runtime_sse2) {
+            return None;
+        }
+        genericsimd::Forward::new(ninfo, needle).map(Forward)
+    }
+
+    /// Returns the minimum length of haystack that is needed for this searcher
+    /// to work. Passing a haystack with a length smaller than this will cause
+    /// `find` to panic.
+    #[inline(always)]
+    pub(crate) fn min_haystack_len(&self) -> usize {
+        self.0.min_haystack_len::<__m128i>()
+    }
+
+    #[inline(always)]
+    pub(crate) fn find(
+        &self,
+        haystack: &[u8],
+        needle: &[u8],
+    ) -> Option<usize> {
+        // SAFETY: sse2 is enabled on all x86_64 targets, so this is always
+        // safe to call.
+        unsafe { self.find_impl(haystack, needle) }
+    }
+
+    #[target_feature(enable = "sse2")]
+    unsafe fn find_impl(
+        &self,
+        haystack: &[u8],
+        needle: &[u8],
+    ) -> Option<usize> {
+        genericsimd::fwd_find::<__m128i>(&self.0, haystack, needle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::memmem::{prefilter::PrefilterState, NeedleInfo};
+
+    fn find(
+        _: &mut PrefilterState,
         ninfo: &NeedleInfo,
         haystack: &[u8],
         needle: &[u8],
     ) -> Option<usize> {
-        let (rare, _) = ninfo.rarebytes.as_rare_ordered_usize();
-        crate::memchr(needle[rare], haystack).map(|i| i.saturating_sub(rare))
+        super::Forward::new(ninfo, needle).unwrap().find(haystack, needle)
     }
-    super::super::genericsimd::find::<__m128i>(
-        prestate,
-        ninfo,
-        haystack,
-        needle,
-        simple_memchr_fallback,
-    )
-}
 
-#[cfg(all(test, feature = "std"))]
-mod tests {
     #[test]
     #[cfg(not(miri))]
     fn prefilter_permutations() {
         use crate::memmem::prefilter::tests::PrefilterTest;
-        // SAFETY: super::find is safe to call for all inputs on x86.
-        unsafe { PrefilterTest::run_all_tests(super::find) };
+        // SAFETY: sse2 is enabled on all x86_64 targets, so this is always
+        // safe to call.
+        unsafe {
+            PrefilterTest::run_all_tests_filter(find, |t| {
+                // This substring searcher only works on certain configs, so
+                // filter our tests such that Forward::new will be guaranteed
+                // to succeed.
+                let (rare1i, rare2i) =
+                    t.ninfo.rarebytes.as_rare_ordered_usize();
+                t.haystack.len() >= (rare2i + 16)
+                    && t.needle.len() >= 2
+                    && t.needle.len() <= 16
+                    && rare1i != rare2i
+            })
+        }
     }
 }
