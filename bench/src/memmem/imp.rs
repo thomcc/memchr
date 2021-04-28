@@ -674,6 +674,84 @@ pub(crate) mod sliceslice {
     }
 }
 
+/// libc's substring search implementation.
+///
+/// libc doesn't have any way to amortize the construction of the searcher, so
+/// we can't implement any of the prebuilt routines.
+pub(crate) mod libc {
+    pub(crate) fn available(_: &str) -> &'static [&'static str] {
+        &["oneshot", "oneshotiter"]
+    }
+
+    pub(crate) mod fwd {
+        fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+            let p = unsafe {
+                libc::memmem(
+                    haystack.as_ptr() as *const libc::c_void,
+                    haystack.len(),
+                    needle.as_ptr() as *const libc::c_void,
+                    needle.len(),
+                )
+            };
+            if p.is_null() {
+                None
+            } else {
+                Some(p as usize - (haystack.as_ptr() as usize))
+            }
+        }
+
+        pub(crate) fn oneshot(haystack: &str, needle: &str) -> bool {
+            find(haystack.as_bytes(), needle.as_bytes()).is_some()
+        }
+
+        pub(crate) fn prebuilt(
+            _needle: &str,
+        ) -> impl Fn(&str) -> bool + 'static {
+            |_| unimplemented!("std does not support prebuilt searches")
+        }
+
+        pub(crate) fn oneshotiter<'a>(
+            haystack: &'a str,
+            needle: &'a str,
+        ) -> impl Iterator<Item = usize> + 'a {
+            super::super::iter_from_find(
+                haystack.as_bytes(),
+                needle.as_bytes(),
+                find,
+            )
+        }
+
+        pub(crate) fn prebuiltiter(_needle: &str) -> super::super::NoIter {
+            super::super::NoIter { imp: "libc" }
+        }
+    }
+
+    pub(crate) mod rev {
+        pub(crate) fn oneshot(_haystack: &str, _needle: &str) -> bool {
+            unimplemented!("libc does not support reverse searches")
+        }
+
+        pub(crate) fn prebuilt(
+            _needle: &str,
+        ) -> impl Fn(&str) -> bool + 'static {
+            |_| unimplemented!("libc does not support reverse searches")
+        }
+
+        pub(crate) fn oneshotiter<'a>(
+            _haystack: &'a str,
+            _needle: &'a str,
+        ) -> impl Iterator<Item = usize> + 'a {
+            std::iter::from_fn(move || {
+                unimplemented!("libc does not support reverse searches")
+            })
+        }
+
+        pub(crate) fn prebuiltiter(_needle: &str) -> super::super::NoIter {
+            unimplemented!("libc does not support reverse searches")
+        }
+    }
+}
+
 /// An iterator that looks like a PrebuilIter API-wise, but panics if it's
 /// called. This should be used for implementations that don't support
 /// prebuilt iteration.

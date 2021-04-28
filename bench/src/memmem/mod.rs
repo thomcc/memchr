@@ -38,6 +38,8 @@ follows:
       The implementation of substring search provided by the twoway crate.
     sliceslice
       The implementation of substring search provided by the sliceslice crate.
+    libc
+      The implementation of memmem in your friendly neighborhood libc.
 
     Note that there is also a 'memmem' crate, but it is unmaintained and
     appears to just be a snapshot of std's implementation at a particular
@@ -160,6 +162,7 @@ fn oneshot(c: &mut Criterion) {
             def_impl!($inp, $q, $freq, stud);
             def_impl!($inp, $q, $freq, twoway);
             def_impl!($inp, $q, $freq, sliceslice);
+            def_impl!($inp, $q, $freq, libc);
         };
     }
     for inp in INPUTS {
@@ -227,6 +230,7 @@ fn prebuilt(c: &mut Criterion) {
             def_impl!($inp, $q, $freq, stud);
             def_impl!($inp, $q, $freq, twoway);
             def_impl!($inp, $q, $freq, sliceslice);
+            def_impl!($inp, $q, $freq, libc);
         };
     }
     for inp in INPUTS {
@@ -294,6 +298,7 @@ fn oneshot_iter(c: &mut Criterion) {
             def_impl!($inp, $q, $freq, stud);
             def_impl!($inp, $q, $freq, twoway);
             def_impl!($inp, $q, $freq, sliceslice);
+            def_impl!($inp, $q, $freq, libc);
         };
     }
     for inp in INPUTS {
@@ -361,6 +366,7 @@ fn prebuilt_iter(c: &mut Criterion) {
             def_impl!($inp, $q, $freq, stud);
             def_impl!($inp, $q, $freq, twoway);
             def_impl!($inp, $q, $freq, sliceslice);
+            def_impl!($inp, $q, $freq, libc);
         };
     }
     for inp in INPUTS {
