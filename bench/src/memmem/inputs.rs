@@ -42,11 +42,21 @@ pub const INPUTS: &'static [Input] = &[
                 count: 1,
             },
             Query { name: "sherlock", needle: "Sherlock", count: 1 },
+            Query {
+                name: "long-needle",
+                needle: "I feel afraid of Mostafa\nHe is stronger and older than I am, and more experienced\nShould I turn back?\nDoc you're beginning to sound like Sherlock Holmes.",
+                count: 1,
+            },
+            Query {
+                name: "huge-needle",
+                needle: "Since we will meet anyway, then the sooner, the better\nTomorrow at 4:30 in front of the Horse-Riding Club\nNo, 4:30\nI am confused, almost lost\nAs if an invisible hand pushed me towards an unknown fate\nI needed someone by my side\nI needed someone to guide me to the path of security\nBut I had no one\nI couldn't ask my father's opinion, nor his wife's\nI felt just as lonely as I had before\nI feel afraid of Mostafa\nHe is stronger and older than I am, and more experienced\nShould I turn back?\nDoc you're beginning to sound like Sherlock Holmes.",
+                count: 1,
+            },
         ],
         common: &[
             Query { name: "that", needle: "that", count: 865 },
-            Query { name: "one-space", needle: " ", count: 96667 },
-            Query { name: "you", needle: "you", count: 5016 },
+            Query { name: "one-space", needle: " ", count: 96602 },
+            Query { name: "you", needle: "you", count: 5009 },
             // It would be nice to benchmark this case, although it's not
             // terribly important. The problem is that std's substring
             // implementation (correctly) never returns match offsets that
