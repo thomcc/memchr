@@ -2,8 +2,6 @@
 TODO
 */
 
-#![allow(warnings)]
-
 pub use self::prefilter::Prefilter;
 
 use crate::{
@@ -84,6 +82,7 @@ macro_rules! define_memmem_simple_tests {
 }
 
 mod byte_frequencies;
+#[cfg(all(target_arch = "x86_64", memchr_runtime_simd))]
 mod genericsimd;
 mod prefilter;
 mod rabinkarp;

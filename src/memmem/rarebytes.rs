@@ -96,6 +96,7 @@ impl RareNeedleBytes {
     /// second offset. This is useful when the caller doesn't care whether
     /// rare1 is rarer than rare2, but just wants to ensure that they are
     /// ordered with respect to one another.
+    #[cfg(memchr_runtime_simd)]
     pub(crate) fn as_rare_ordered_usize(&self) -> (usize, usize) {
         let (rare1i, rare2i) = self.as_rare_ordered_u8();
         (rare1i as usize, rare2i as usize)
@@ -103,6 +104,7 @@ impl RareNeedleBytes {
 
     /// Like as_rare_ordered_usize, but returns the offsets as their native
     /// u8 values.
+    #[cfg(memchr_runtime_simd)]
     pub(crate) fn as_rare_ordered_u8(&self) -> (u8, u8) {
         if self.rare1i <= self.rare2i {
             (self.rare1i, self.rare2i)

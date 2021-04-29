@@ -1,6 +1,7 @@
 use crate::memmem::{rarebytes::RareNeedleBytes, NeedleInfo};
 
 mod fallback;
+#[cfg(all(target_arch = "x86_64", memchr_runtime_simd))]
 mod genericsimd;
 #[cfg(all(not(miri), target_arch = "x86_64", memchr_runtime_simd))]
 mod x86;
