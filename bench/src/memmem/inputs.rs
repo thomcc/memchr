@@ -43,6 +43,11 @@ pub const INPUTS: &'static [Input] = &[
             },
             Query { name: "sherlock", needle: "Sherlock", count: 1 },
             Query {
+                name: "medium-needle",
+                needle: "homer, marge, bart, lisa, maggie",
+                count: 1,
+            },
+            Query {
                 name: "long-needle",
                 needle: "I feel afraid of Mostafa\nHe is stronger and older than I am, and more experienced\nShould I turn back?\nDoc you're beginning to sound like Sherlock Holmes.",
                 count: 1,
@@ -55,13 +60,14 @@ pub const INPUTS: &'static [Input] = &[
         ],
         common: &[
             Query { name: "that", needle: "that", count: 865 },
-            Query { name: "one-space", needle: " ", count: 96602 },
+            Query { name: "one-space", needle: " ", count: 96606 },
             Query { name: "you", needle: "you", count: 5009 },
             // It would be nice to benchmark this case, although it's not
             // terribly important. The problem is that std's substring
             // implementation (correctly) never returns match offsets that
-            // split an encoded codepoint, where as memmem on bytes will.
-            // So the counts differ.
+            // split an encoded codepoint, where as memmem on bytes will. So
+            // the counts differ. We could modify our harness to skip this on
+            // std, but it seems like much ado about nothing.
             // Query { name: "empty", needle: "", count: 613655 },
         ],
     },

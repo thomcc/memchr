@@ -7,6 +7,38 @@ use crate::memmem::{
     NeedleInfo,
 };
 
+/// The minimum length of a needle required for this algorithm. The minimum
+/// is 2 since a length of 1 should just use memchr and a length of 0 isn't
+/// a case handled by this searcher.
+pub(crate) const MIN_NEEDLE_LEN: usize = 2;
+
+/// The maximum length of a needle required for this algorithm.
+///
+/// In reality, there is no hard max here. The code below can handle any
+/// length needle. (Perhaps that suggests there are missing optimizations.)
+/// Instead, this is a heuristic and a bound guaranteeing our linear time
+/// complexity.
+///
+/// It is a heuristic because when a candidate match is found, memcmp is run.
+/// For very large needles with lots of false positives, memcmp can make the
+/// code run quite slow.
+///
+/// It is a bound because the worst case behavior with memcmp is multiplicative
+/// in the size of the needle and haystack, and we want to keep that additive.
+/// This bound ensures we still meet that bound theoretically, since it's just
+/// a constant. We aren't acting in bad faith here, memcmp on tiny needles
+/// is so fast that even in pathological cases (see pathological vector
+/// benchmarks), this is still just as fast or faster in practice.
+///
+/// This specific number was chosen by tweaking a bit and running benchmarks.
+/// The rare-medium-needle, for example, gets about 5% faster by using this
+/// algorithm instead of a prefilter-accelerated Two-Way. There's also a
+/// theoretical desire to keep this number reasonably low, to mitigate the
+/// impact of pathological cases. I did try 64, and some benchmarks got a
+/// little better, and others (particularly the pathological ones), got a lot
+/// worse. So... 32 it is?
+pub(crate) const MAX_NEEDLE_LEN: usize = 32;
+
 /// The implementation of the forward vector accelerated substring search.
 ///
 /// This is extremely similar to the prefilter vector module by the same name.
@@ -40,7 +72,10 @@ impl Forward {
         // if the rare bytes detected are at the same position. (It likely
         // suggests a degenerate case, although it should technically not be
         // possible.)
-        if needle.len() < 2 || needle.len() > 16 || rare1i == rare2i {
+        if needle.len() < MIN_NEEDLE_LEN
+            || needle.len() > MAX_NEEDLE_LEN
+            || rare1i == rare2i
+        {
             return None;
         }
         Some(Forward { rare1i, rare2i })
@@ -76,7 +111,7 @@ pub(crate) unsafe fn fwd_find<V: Vector>(
     needle: &[u8],
 ) -> Option<usize> {
     // It would be nice if we didn't have this check here, since the meta
-    // searcher should handle it for us. But without this, I don't this we
+    // searcher should handle it for us. But without this, I don't think we
     // guarantee that end_ptr.sub(needle.len()) won't result in UB. We could
     // put it as part of the safety contract, but it makes it more complicated
     // than necessary.
@@ -86,8 +121,16 @@ pub(crate) unsafe fn fwd_find<V: Vector>(
     let min_haystack_len = fwd.min_haystack_len::<V>();
     assert!(haystack.len() >= min_haystack_len, "haystack too small");
     debug_assert!(needle.len() <= haystack.len());
-    debug_assert!(needle.len() >= 2, "needle must be at least 2 bytes");
-    debug_assert!(needle.len() <= 16, "needle must be at most 16 bytes");
+    debug_assert!(
+        needle.len() >= MIN_NEEDLE_LEN,
+        "needle must be at least {} bytes",
+        MIN_NEEDLE_LEN,
+    );
+    debug_assert!(
+        needle.len() <= MAX_NEEDLE_LEN,
+        "needle must be at most {} bytes",
+        MAX_NEEDLE_LEN,
+    );
 
     let (rare1i, rare2i) = (fwd.rare1i as usize, fwd.rare2i as usize);
     let rare1chunk = V::splat(needle[rare1i]);

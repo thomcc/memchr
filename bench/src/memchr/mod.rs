@@ -23,7 +23,7 @@ mod inputs;
 mod naive;
 
 pub fn all(c: &mut Criterion) {
-    define_memchr_input1(c, "memchr1/crate/huge", HUGE, move |search, b| {
+    define_memchr_input1(c, "memchr1/krate/huge", HUGE, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count,
@@ -31,7 +31,7 @@ pub fn all(c: &mut Criterion) {
             );
         });
     });
-    define_memchr_input1(c, "memchr1/crate/small", SMALL, move |search, b| {
+    define_memchr_input1(c, "memchr1/krate/small", SMALL, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count,
@@ -39,7 +39,7 @@ pub fn all(c: &mut Criterion) {
             );
         });
     });
-    define_memchr_input1(c, "memchr1/crate/tiny", TINY, move |search, b| {
+    define_memchr_input1(c, "memchr1/krate/tiny", TINY, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count,
@@ -47,7 +47,7 @@ pub fn all(c: &mut Criterion) {
             );
         });
     });
-    define_memchr_input1(c, "memchr1/crate/empty", EMPTY, move |search, b| {
+    define_memchr_input1(c, "memchr1/krate/empty", EMPTY, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count,
@@ -175,7 +175,7 @@ pub fn all(c: &mut Criterion) {
         });
     });
 
-    define_memchr_input2(c, "memchr2/crate/huge", HUGE, move |search, b| {
+    define_memchr_input2(c, "memchr2/krate/huge", HUGE, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count + search.byte2.count,
@@ -187,7 +187,7 @@ pub fn all(c: &mut Criterion) {
             );
         });
     });
-    define_memchr_input2(c, "memchr2/crate/small", SMALL, move |search, b| {
+    define_memchr_input2(c, "memchr2/krate/small", SMALL, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count + search.byte2.count,
@@ -199,7 +199,7 @@ pub fn all(c: &mut Criterion) {
             );
         });
     });
-    define_memchr_input2(c, "memchr2/crate/tiny", TINY, move |search, b| {
+    define_memchr_input2(c, "memchr2/krate/tiny", TINY, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count + search.byte2.count,
@@ -211,7 +211,7 @@ pub fn all(c: &mut Criterion) {
             );
         });
     });
-    define_memchr_input2(c, "memchr2/crate/empty", EMPTY, move |search, b| {
+    define_memchr_input2(c, "memchr2/krate/empty", EMPTY, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count + search.byte2.count,
@@ -342,7 +342,7 @@ pub fn all(c: &mut Criterion) {
         });
     });
 
-    define_memchr_input3(c, "memchr3/crate/huge", HUGE, move |search, b| {
+    define_memchr_input3(c, "memchr3/krate/huge", HUGE, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count + search.byte2.count + search.byte3.count,
@@ -355,7 +355,7 @@ pub fn all(c: &mut Criterion) {
             );
         });
     });
-    define_memchr_input3(c, "memchr3/crate/small", SMALL, move |search, b| {
+    define_memchr_input3(c, "memchr3/krate/small", SMALL, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count + search.byte2.count + search.byte3.count,
@@ -368,7 +368,7 @@ pub fn all(c: &mut Criterion) {
             );
         });
     });
-    define_memchr_input3(c, "memchr3/crate/tiny", TINY, move |search, b| {
+    define_memchr_input3(c, "memchr3/krate/tiny", TINY, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count + search.byte2.count + search.byte3.count,
@@ -381,7 +381,7 @@ pub fn all(c: &mut Criterion) {
             );
         });
     });
-    define_memchr_input3(c, "memchr3/crate/empty", EMPTY, move |search, b| {
+    define_memchr_input3(c, "memchr3/krate/empty", EMPTY, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count + search.byte2.count + search.byte3.count,
@@ -529,7 +529,7 @@ pub fn all(c: &mut Criterion) {
         });
     });
 
-    define_memchr_input1(c, "memrchr1/crate/huge", HUGE, move |search, b| {
+    define_memchr_input1(c, "memrchr1/krate/huge", HUGE, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count,
@@ -539,7 +539,7 @@ pub fn all(c: &mut Criterion) {
     });
     define_memchr_input1(
         c,
-        "memrchr1/crate/small",
+        "memrchr1/krate/small",
         SMALL,
         move |search, b| {
             b.iter(|| {
@@ -550,7 +550,7 @@ pub fn all(c: &mut Criterion) {
             });
         },
     );
-    define_memchr_input1(c, "memrchr1/crate/tiny", TINY, move |search, b| {
+    define_memchr_input1(c, "memrchr1/krate/tiny", TINY, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count,
@@ -560,7 +560,7 @@ pub fn all(c: &mut Criterion) {
     });
     define_memchr_input1(
         c,
-        "memrchr1/crate/empty",
+        "memrchr1/krate/empty",
         EMPTY,
         move |search, b| {
             b.iter(|| {
@@ -640,7 +640,7 @@ pub fn all(c: &mut Criterion) {
         );
     }
 
-    define_memchr_input2(c, "memrchr2/crate/huge", HUGE, move |search, b| {
+    define_memchr_input2(c, "memrchr2/krate/huge", HUGE, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count + search.byte2.count,
@@ -654,7 +654,7 @@ pub fn all(c: &mut Criterion) {
     });
     define_memchr_input2(
         c,
-        "memrchr2/crate/small",
+        "memrchr2/krate/small",
         SMALL,
         move |search, b| {
             b.iter(|| {
@@ -669,7 +669,7 @@ pub fn all(c: &mut Criterion) {
             });
         },
     );
-    define_memchr_input2(c, "memrchr2/crate/tiny", TINY, move |search, b| {
+    define_memchr_input2(c, "memrchr2/krate/tiny", TINY, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count + search.byte2.count,
@@ -683,7 +683,7 @@ pub fn all(c: &mut Criterion) {
     });
     define_memchr_input2(
         c,
-        "memrchr2/crate/empty",
+        "memrchr2/krate/empty",
         EMPTY,
         move |search, b| {
             b.iter(|| {
@@ -699,7 +699,7 @@ pub fn all(c: &mut Criterion) {
         },
     );
 
-    define_memchr_input3(c, "memrchr3/crate/huge", HUGE, move |search, b| {
+    define_memchr_input3(c, "memrchr3/krate/huge", HUGE, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count + search.byte2.count + search.byte3.count,
@@ -714,7 +714,7 @@ pub fn all(c: &mut Criterion) {
     });
     define_memchr_input3(
         c,
-        "memrchr3/crate/small",
+        "memrchr3/krate/small",
         SMALL,
         move |search, b| {
             b.iter(|| {
@@ -732,7 +732,7 @@ pub fn all(c: &mut Criterion) {
             });
         },
     );
-    define_memchr_input3(c, "memrchr3/crate/tiny", TINY, move |search, b| {
+    define_memchr_input3(c, "memrchr3/krate/tiny", TINY, move |search, b| {
         b.iter(|| {
             assert_eq!(
                 search.byte1.count + search.byte2.count + search.byte3.count,
@@ -747,7 +747,7 @@ pub fn all(c: &mut Criterion) {
     });
     define_memchr_input3(
         c,
-        "memrchr3/crate/empty",
+        "memrchr3/krate/empty",
         EMPTY,
         move |search, b| {
             b.iter(|| {

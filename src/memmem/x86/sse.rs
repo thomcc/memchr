@@ -69,7 +69,8 @@ mod tests {
     #[test]
     #[cfg(not(miri))]
     fn prefilter_permutations() {
-        use crate::memmem::prefilter::tests::PrefilterTest;
+        use crate::memmem::{genericsimd, prefilter::tests::PrefilterTest};
+
         // SAFETY: sse2 is enabled on all x86_64 targets, so this is always
         // safe to call.
         unsafe {
@@ -80,8 +81,8 @@ mod tests {
                 let (rare1i, rare2i) =
                     t.ninfo.rarebytes.as_rare_ordered_usize();
                 t.haystack.len() >= (rare2i + 16)
-                    && t.needle.len() >= 2
-                    && t.needle.len() <= 16
+                    && t.needle.len() >= genericsimd::MIN_NEEDLE_LEN
+                    && t.needle.len() <= genericsimd::MAX_NEEDLE_LEN
                     && rare1i != rare2i
             })
         }
