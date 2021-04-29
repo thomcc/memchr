@@ -47,6 +47,13 @@ mod std {
             unsafe { self.find_impl(haystack, needle) }
         }
 
+        /// The implementation of find marked with the appropriate target
+        /// feature.
+        ///
+        /// # Safety
+        ///
+        /// Callers must ensure that the avx2 CPU feature is enabled in the
+        /// current environment.
         #[target_feature(enable = "avx2")]
         unsafe fn find_impl(
             &self,

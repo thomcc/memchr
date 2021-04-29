@@ -62,7 +62,7 @@ impl<'a> Pre<'a> {
 ///
 /// # Safety
 ///
-/// A prefilter function is unsafe to create, since not all prefilters are
+/// A prefilter function is not safe to create, since not all prefilters are
 /// safe to call in all contexts. (e.g., A prefilter that uses AVX instructions
 /// may only be called on x86_64 CPUs with the relevant AVX feature enabled.)
 /// Thus, callers must ensure that when a prefilter function is created that it
@@ -387,12 +387,22 @@ pub(crate) mod tests {
 
     impl PrefilterTest {
         /// Run all generated forward prefilter tests on the given prefn.
+        ///
+        /// # Safety
+        ///
+        /// Callers must ensure that the given prefilter function pointer is
+        /// safe to call for all inputs in the current environment.
         pub(crate) unsafe fn run_all_tests(prefn: PrefilterFnTy) {
             PrefilterTest::run_all_tests_filter(prefn, |_| true)
         }
 
         /// Run all generated forward prefilter tests that pass the given
         /// predicate on the given prefn.
+        ///
+        /// # Safety
+        ///
+        /// Callers must ensure that the given prefilter function pointer is
+        /// safe to call for all inputs in the current environment.
         pub(crate) unsafe fn run_all_tests_filter(
             prefn: PrefilterFnTy,
             mut predicate: impl FnMut(&PrefilterTest) -> bool,
@@ -454,6 +464,11 @@ pub(crate) mod tests {
         /// Run this specific test on the given prefilter function. If the
         /// outputs do no match, then this routine panics with a failure
         /// message.
+        ///
+        /// # Safety
+        ///
+        /// Callers must ensure that the given prefilter function pointer is
+        /// safe to call for all inputs in the current environment.
         unsafe fn run(&self, prefn: PrefilterFnTy) {
             let mut prestate = PrefilterState::new();
             assert_eq!(

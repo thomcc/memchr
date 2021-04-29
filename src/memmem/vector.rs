@@ -11,10 +11,13 @@
 ///
 /// # Safety
 ///
-/// All methods are unsafe since they are intended to be implemented using
-/// vendor intrinsics, which are also unsafe. Callers must ensure that the
+/// All methods are not safe since they are intended to be implemented using
+/// vendor intrinsics, which are also not safe. Callers must ensure that the
 /// appropriate target features are enabled in the calling function, and that
-/// the current CPU supports them.
+/// the current CPU supports them. All implementations should avoid marking the
+/// routines with #[target_feature] and instead mark them as #[inline(always)]
+/// to ensure they get appropriately inlined. (inline(always) cannot be used
+/// with target_feature.)
 pub(crate) trait Vector: Copy + core::fmt::Debug {
     /// _mm_set1_epi8 or _mm256_set1_epi8
     unsafe fn splat(byte: u8) -> Self;

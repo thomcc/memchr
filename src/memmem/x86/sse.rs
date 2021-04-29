@@ -36,6 +36,13 @@ impl Forward {
         unsafe { self.find_impl(haystack, needle) }
     }
 
+    /// The implementation of find marked with the appropriate target feature.
+    ///
+    /// # Safety
+    ///
+    /// This is safe to call in all cases since sse2 is guaranteed to be part
+    /// of x86_64. It is marked as unsafe because of the target feature
+    /// attribute.
     #[target_feature(enable = "sse2")]
     unsafe fn find_impl(
         &self,

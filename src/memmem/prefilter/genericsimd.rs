@@ -18,11 +18,14 @@ use crate::memmem::{
 /// haystacks, this will on average spend more time in vectorized code than you
 /// would if you just selected the first and last bytes of the needle.
 ///
+/// Note that a non-prefilter variant of this algorithm can be found in the
+/// parent module, but it only works on smaller needles.
+///
 /// `prestate`, `ninfo`, `haystack` and `needle` are the four prefilter
 /// function parameters. `fallback` is a prefilter that is used if the haystack
 /// is too small to be handled with the given vector size.
 ///
-/// This routine is unsafe because it is intended for callers to specialize
+/// This routine is not safe because it is intended for callers to specialize
 /// this with a particular vector (e.g., __m256i) and then call it with the
 /// relevant target feature (e.g., avx2) enabled.
 ///
@@ -104,11 +107,15 @@ pub(crate) unsafe fn find<V: Vector>(
 // to make it easy to switch to and benchmark when possible.
 
 /// Search for an occurrence of two rare bytes from the needle in the current
-/// chunk pointed to by ptr. It must be valid to do an unaligned read of
-/// size(V) bytes starting at both (ptr + rare1i) and (ptr + rare2i).
+/// chunk pointed to by ptr.
 ///
 /// rare1chunk and rare2chunk correspond to vectors with the rare1 and rare2
 /// bytes repeated in each 8-bit lane, respectively.
+///
+/// # Safety
+///
+/// It must be safe to do an unaligned read of size(V) bytes starting at both
+/// (ptr + rare1i) and (ptr + rare2i).
 #[inline(always)]
 unsafe fn find_in_chunk2<V: Vector>(
     ptr: *const u8,
@@ -132,11 +139,15 @@ unsafe fn find_in_chunk2<V: Vector>(
 
 /// Search for an occurrence of two rare bytes and the first byte (even if one
 /// of the rare bytes is equivalent to the first byte) from the needle in the
-/// current chunk pointed to by ptr. It must be valid to do an unaligned read
-/// of size(V) bytes starting at ptr, (ptr + rare1i) and (ptr + rare2i).
+/// current chunk pointed to by ptr.
 ///
 /// firstchunk, rare1chunk and rare2chunk correspond to vectors with the first,
 /// rare1 and rare2 bytes repeated in each 8-bit lane, respectively.
+///
+/// # Safety
+///
+/// It must be safe to do an unaligned read of size(V) bytes starting at ptr,
+/// (ptr + rare1i) and (ptr + rare2i).
 #[allow(dead_code)]
 #[inline(always)]
 unsafe fn find_in_chunk3<V: Vector>(
