@@ -1132,7 +1132,7 @@ mod proptests {
     }
 }
 
-/// This module defines a bunch of hand-written "simple" substring tests. It
+/// This module defines some hand-written "simple" substring tests. It
 /// also provides routines for easily running them on any substring search
 /// implementation.
 #[cfg(test)]

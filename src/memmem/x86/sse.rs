@@ -2,6 +2,8 @@ use core::arch::x86_64::__m128i;
 
 use crate::memmem::{genericsimd, NeedleInfo};
 
+/// An SSE accelerated vectorized substring search routine that only works on
+/// small needles.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Forward(genericsimd::Forward);
 
@@ -44,7 +46,7 @@ impl Forward {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use crate::memmem::{prefilter::PrefilterState, NeedleInfo};
 
