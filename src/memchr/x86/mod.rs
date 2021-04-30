@@ -34,8 +34,7 @@ mod sse2;
 #[cfg(feature = "std")]
 macro_rules! unsafe_ifunc {
     ($fnty:ty, $name:ident, $haystack:ident, $($needle:ident),+) => {{
-        use std::mem;
-        use std::sync::atomic::{AtomicPtr, Ordering};
+        use std::{mem, sync::atomic::{AtomicPtr, Ordering}};
 
         type FnRaw = *mut ();
 

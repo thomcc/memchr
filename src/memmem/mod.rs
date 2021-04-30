@@ -1,5 +1,69 @@
 /*!
-TODO
+This module provides forward and reverse substring search routines.
+
+Unlike the standard library's substring search routines, these work on
+arbitrary bytes. For all non-empty needles, these routines will report exactly
+the same values as the corresponding routines in the standard library. For
+the empty needle, the standard library reports matches only at valid UTF-8
+boundaries, where as these routines will report matches at every position.
+
+Other than being able to work on arbitrary bytes, the primary reason to prefer
+these routines over the standard library routines is that these will generally
+be faster. In some cases, significantly so.
+
+# Example: iterating over substring matches
+
+This example shows how to use [`find_iter`] to find occurrences of a substring
+in a haystack.
+
+```
+use memchr::memmem;
+
+let haystack = b"foo bar foo baz foo";
+
+let mut it = memmem::find_iter(haystack, "foo");
+assert_eq!(Some(0), it.next());
+assert_eq!(Some(8), it.next());
+assert_eq!(Some(16), it.next());
+assert_eq!(None, it.next());
+```
+
+# Example: iterating over substring matches in reverse
+
+This example shows how to use [`rfind_iter`] to find occurrences of a substring
+in a haystack starting from the end of the haystack.
+
+**NOTE:** This module does not implement double ended iterators, so reverse
+searches aren't done by calling `rev` on a forward iterator.
+
+```
+use memchr::memmem;
+
+let haystack = b"foo bar foo baz foo";
+
+let mut it = memmem::rfind_iter(haystack, "foo");
+assert_eq!(Some(16), it.next());
+assert_eq!(Some(8), it.next());
+assert_eq!(Some(0), it.next());
+assert_eq!(None, it.next());
+```
+
+# Example: repeating a search for the same needle
+
+It may be possible for the overhead of constructing a substring searcher to be
+measurable in some workloads. In cases where the same needle is used to search
+many haystacks, it is possible to do construction once and thus to avoid it for
+subsequent searches. This can be done with a [`Finder`] (or a [`FinderRev`] for
+reverse searches).
+
+```
+use memchr::memmem;
+
+let finder = memmem::Finder::new("foo");
+
+assert_eq!(Some(4), finder.find(b"baz foo quux"));
+assert_eq!(None, finder.find(b"quux baz bar"));
+```
 */
 
 pub use self::prefilter::Prefilter;
@@ -121,9 +185,9 @@ mod x86;
 /// assert_eq!(None, it.next());
 /// ```
 #[inline]
-pub fn find_iter<'h, 'n>(
+pub fn find_iter<'h, 'n, N: 'n + ?Sized + AsRef<[u8]>>(
     haystack: &'h [u8],
-    needle: &'n [u8],
+    needle: &'n N,
 ) -> FindIter<'h, 'n> {
     FindIter::new(haystack, Finder::new(needle))
 }
@@ -155,9 +219,9 @@ pub fn find_iter<'h, 'n>(
 /// assert_eq!(None, it.next());
 /// ```
 #[inline]
-pub fn rfind_iter<'h, 'n>(
+pub fn rfind_iter<'h, 'n, N: 'n + ?Sized + AsRef<[u8]>>(
     haystack: &'h [u8],
-    needle: &'n [u8],
+    needle: &'n N,
 ) -> FindRevIter<'h, 'n> {
     FindRevIter::new(haystack, FinderRev::new(needle))
 }
@@ -338,8 +402,8 @@ impl<'h, 'n> Iterator for FindRevIter<'h, 'n> {
 /// constructing the searcher in the first place. This is a somewhat niche
 /// concern when it's necessary to re-use the same needle to search multiple
 /// different haystacks with as little overhead as possible. In general, using
-/// [`memmem`] is good enough, but `Finder` is useful when you can
-/// meaningfully observe searcher construction time in a profile.
+/// [`find`] is good enough, but `Finder` is useful when you can meaningfully
+/// observe searcher construction time in a profile.
 ///
 /// When the `std` feature is enabled, then this type has an `into_owned`
 /// version which permits building a `Finder` that is not connected to
@@ -464,8 +528,8 @@ impl<'n> Finder<'n> {
 /// searcher that can be used to search haystacks without the overhead of
 /// constructing the searcher in the first place. This is a somewhat niche
 /// concern when it's necessary to re-use the same needle to search multiple
-/// different haystacks with as little overhead as possible. In general, using
-/// [`memrmem`] is good enough, but `FinderRev` is useful when you can
+/// different haystacks with as little overhead as possible. In general,
+/// using [`rfind`] is good enough, but `FinderRev` is useful when you can
 /// meaningfully observe searcher construction time in a profile.
 ///
 /// When the `std` feature is enabled, then this type has an `into_owned`
